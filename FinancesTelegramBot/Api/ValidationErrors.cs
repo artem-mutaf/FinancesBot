@@ -13,6 +13,9 @@ public sealed class ValidationErrors
 
     public bool HasErrors => _errors.Count > 0;
 
+    /// <summary>Все сообщения об ошибках подряд — например, чтобы показать их в чате бота.</summary>
+    public IEnumerable<string> Messages => _errors.Values.SelectMany(list => list);
+
     public void Add(string field, string message)
     {
         if (!_errors.TryGetValue(field, out var list))

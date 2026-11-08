@@ -23,17 +23,26 @@ public sealed class UserProvisioningService(AppDbContext db, ILogger<UserProvisi
         ("Зарплата", "💼"), ("Подарки", "🎁"), ("Другое", "💰"),
     ];
 
-    public async Task<AppUser> EnsureUserAsync(long id, string firstName, string? username, CancellationToken ct)
+    /// <param name="timeZone">
+    /// Часовой пояс от Mini App. null — не трогать сохранённый (бот его не знает).
+    /// </param>
+    public async Task<AppUser> EnsureUserAsync(long id, string firstName, string? username, CancellationToken ct,
+        string? timeZone = null)
     {
+        var validTimeZone = UserClock.IsValid(timeZone) ? timeZone : null;
+
         // FindAsync ищет по первичному ключу (сначала в памяти контекста, потом в БД).
         var user = await db.Users.FindAsync([id], ct);
 
         if (user is not null)
         {
             // Пользователь мог сменить имя в Telegram — держим данные актуальными.
-            // EF сам отслеживает изменения (change tracking) и обновит только изменённые поля.
+            // EF сам отслеживает изменения (change tracking) и обновит только изменённые поля;
+            // если ничего не поменялось, SaveChanges вообще не пойдёт в базу.
             user.FirstName = firstName;
             user.Username = username;
+            if (validTimeZone is not null)
+                user.TimeZone = validTimeZone;
             await db.SaveChangesAsync(ct);
             return user;
         }
@@ -44,6 +53,7 @@ public sealed class UserProvisioningService(AppDbContext db, ILogger<UserProvisi
             Id = id,
             FirstName = firstName,
             Username = username,
+            TimeZone = validTimeZone,
             CreatedAt = now,
 
             // Связанные объекты добавляем прямо в коллекции — EF сам проставит UserId

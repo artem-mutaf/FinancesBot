@@ -1090,7 +1090,10 @@ async function init() {
         return;
     }
     try {
-        state.me = await api('/api/me'); // создаст пользователя при первом входе
+        // Создаст пользователя при первом входе. Заодно сообщаем серверу часовой пояс телефона —
+        // по нему бот считает "сегодня" и "вчера" при быстром вводе в чате.
+        const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        state.me = await api(`/api/me?timeZone=${encodeURIComponent(timeZone)}`);
         greeting.textContent = `Привет, ${state.me.firstName}!`;
         applyCurrency(state.me.currency);
         currencySelect.hidden = false;

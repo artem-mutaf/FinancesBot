@@ -2,10 +2,16 @@ using System.Security.Claims;
 using FinancesTelegramBot.Auth;
 using FinancesTelegramBot.Data;
 using FinancesTelegramBot.Data.Entities;
+using FinancesTelegramBot.Services;
 using Microsoft.EntityFrameworkCore;
 
 namespace FinancesTelegramBot.Api;
 
+/// <summary>
+/// HTTP-слой для операций: разбирает запрос, вызывает OperationService и превращает
+/// результат в HTTP-ответ. Сама бизнес-логика (валидация, запись) — в OperationService,
+/// потому что её же использует бот.
+/// </summary>
 public static class OperationsEndpoints
 {
     public static IEndpointRouteBuilder MapOperationsEndpoints(this IEndpointRouteBuilder app)
@@ -54,11 +60,6 @@ public static class OperationsEndpoints
     /// <summary>
     /// GET /api/operations/daily?from=2026-11-01&amp;to=2026-11-30 — итоги по каждому дню периода.
     /// Возвращаются только дни, в которых есть операции.
-    ///
-    /// GroupBy + агрегаты EF переводит в один SQL:
-    ///   SELECT "Date", SUM(CASE WHEN "Type"='Income' THEN "Amount" ELSE 0 END), ..., COUNT(*)
-    ///   FROM "Operations" WHERE ... GROUP BY "Date"
-    /// Считает PostgreSQL — в память приходит максимум 31 строка, а не все операции месяца.
     /// </summary>
     private static async Task<IResult> GetDailySummary(
         DateOnly from, DateOnly to, ClaimsPrincipal principal, AppDbContext db, CancellationToken ct)
@@ -94,167 +95,39 @@ public static class OperationsEndpoints
 
     /// <summary>POST /api/operations — добавить доход, расход или перевод.</summary>
     private static async Task<IResult> CreateOperation(
-        OperationRequest request, ClaimsPrincipal principal, AppDbContext db, CancellationToken ct)
+        OperationRequest request, ClaimsPrincipal principal, OperationService operations, CancellationToken ct)
     {
-        var userId = principal.GetUserId();
+        var result = await operations.CreateAsync(principal.GetUserId(), request, ct);
 
-        var errors = new ValidationErrors();
-        var valid = await ValidateAsync(request, userId, db, errors, ct);
-        if (valid is null)
-            return errors.ToResult();
-
-        var operation = new Operation { UserId = userId, CreatedAt = DateTime.UtcNow };
-        Apply(valid, operation);
-        db.Operations.Add(operation);
-        await db.SaveChangesAsync(ct);
-
-        // Перечитываем через ту же проекцию, чтобы вернуть названия счёта и категории.
-        var dto = await db.Operations.Where(o => o.Id == operation.Id).SelectOperationDtos().SingleAsync(ct);
-        return Results.Created($"/api/operations/{operation.Id}", dto);
+        // switch-выражение по типу результата: каждый вариант -> свой HTTP-ответ
+        return result switch
+        {
+            OperationResult.Success s => Results.Created($"/api/operations/{s.Operation.Id}", s.Operation),
+            OperationResult.Invalid i => i.Errors.ToResult(),
+            _ => Results.NotFound(),
+        };
     }
 
-    /// <summary>
-    /// PUT /api/operations/{id} — изменить операцию целиком (можно даже сменить тип:
-    /// расход -> перевод). Баланс пересчитается сам: он вычисляется из операций.
-    /// </summary>
+    /// <summary>PUT /api/operations/{id} — изменить операцию целиком (можно сменить даже тип).</summary>
     private static async Task<IResult> UpdateOperation(
-        int id, OperationRequest request, ClaimsPrincipal principal, AppDbContext db, CancellationToken ct)
+        int id, OperationRequest request, ClaimsPrincipal principal, OperationService operations,
+        CancellationToken ct)
     {
-        var userId = principal.GetUserId();
+        var result = await operations.UpdateAsync(principal.GetUserId(), id, request, ct);
 
-        var operation = await db.Operations.SingleOrDefaultAsync(o => o.Id == id && o.UserId == userId, ct);
-        if (operation is null)
-            return Results.NotFound();
-
-        var errors = new ValidationErrors();
-        var valid = await ValidateAsync(request, userId, db, errors, ct);
-        if (valid is null)
-            return errors.ToResult();
-
-        // CreatedAt НЕ трогаем: это время создания записи, а не изменения.
-        Apply(valid, operation);
-        await db.SaveChangesAsync(ct); // EF сам сгенерирует UPDATE только по изменённым полям
-
-        var dto = await db.Operations.Where(o => o.Id == id).SelectOperationDtos().SingleAsync(ct);
-        return Results.Ok(dto);
+        return result switch
+        {
+            OperationResult.Success s => Results.Ok(s.Operation),
+            OperationResult.Invalid i => i.Errors.ToResult(),
+            _ => Results.NotFound(),
+        };
     }
 
     /// <summary>DELETE /api/operations/{id} — баланс счёта пересчитается сам, ведь он вычисляемый.</summary>
     private static async Task<IResult> DeleteOperation(
-        int id, ClaimsPrincipal principal, AppDbContext db, CancellationToken ct)
+        int id, ClaimsPrincipal principal, OperationService operations, CancellationToken ct)
     {
-        var userId = principal.GetUserId();
-
-        // ExecuteDeleteAsync — сразу "DELETE FROM ... WHERE ...", без загрузки объекта в память.
-        // Возвращает число удалённых строк: 0 => операции нет или она чужая.
-        var deleted = await db.Operations
-            .Where(o => o.Id == id && o.UserId == userId)
-            .ExecuteDeleteAsync(ct);
-
-        return deleted == 0 ? Results.NotFound() : Results.NoContent();
-    }
-
-    // =====================================================================
-    //  Валидация — общая для создания и редактирования
-    // =====================================================================
-
-    /// <summary>Проверенные и нормализованные данные операции — готовы к записи в сущность.</summary>
-    private sealed record ValidOperation(
-        OperationType Type,
-        decimal Amount,
-        int AccountId,
-        int? ToAccountId,
-        int? CategoryId,
-        string? Description,
-        DateOnly Date);
-
-    /// <summary>Переносит проверенные данные в сущность (и для новой, и для существующей).</summary>
-    private static void Apply(ValidOperation valid, Operation operation)
-    {
-        operation.Type = valid.Type;
-        operation.Amount = valid.Amount;
-        operation.AccountId = valid.AccountId;
-        operation.ToAccountId = valid.ToAccountId;
-        operation.CategoryId = valid.CategoryId;
-        operation.Description = valid.Description;
-        operation.Date = valid.Date;
-    }
-
-    /// <summary>
-    /// Проверяет запрос. Возвращает ValidOperation, если всё хорошо, иначе null
-    /// (а ошибки складывает в errors).
-    /// </summary>
-    private static async Task<ValidOperation?> ValidateAsync(
-        OperationRequest request, long userId, AppDbContext db, ValidationErrors errors, CancellationToken ct)
-    {
-        // ---------- Сумма ----------
-        if (request.Amount <= 0)
-            errors.Add("amount", "Сумма должна быть больше нуля");
-        else if (request.Amount >= ValidationErrors.MaxAmount)
-            errors.Add("amount", "Слишком большая сумма");
-        else if (!ValidationErrors.HasAtMostTwoDecimals(request.Amount))
-            errors.Add("amount", "Не больше двух знаков после запятой");
-
-        // ---------- Счёт (источник) ----------
-        // Каждый id от клиента проверяем на принадлежность пользователю!
-        // Иначе можно было бы прислать чужой AccountId и списать деньги с чужого счёта.
-        var accountExists = await db.Accounts.AnyAsync(a => a.Id == request.AccountId && a.UserId == userId, ct);
-        if (!accountExists)
-            errors.Add("accountId", "Счёт не найден");
-
-        // ---------- Зависит от типа операции ----------
-        int? toAccountId = null;
-        int? categoryId = null;
-
-        switch (request.Type)
-        {
-            case OperationType.Transfer:
-                if (request.ToAccountId is not { } targetId) // pattern: "не null, и назови значение targetId"
-                    errors.Add("toAccountId", "Выберите счёт, куда переводить");
-                else if (targetId == request.AccountId)
-                    errors.Add("toAccountId", "Нельзя перевести на тот же счёт");
-                else if (!await db.Accounts.AnyAsync(a => a.Id == targetId && a.UserId == userId, ct))
-                    errors.Add("toAccountId", "Счёт назначения не найден");
-                toAccountId = request.ToAccountId;
-                break;
-
-            case OperationType.Income:
-            case OperationType.Expense:
-                // Тип категории должен совпадать с типом операции: расход нельзя записать в "Зарплату".
-                var expectedCategoryType = request.Type == OperationType.Income
-                    ? CategoryType.Income
-                    : CategoryType.Expense;
-
-                if (request.CategoryId is not { } catId)
-                    errors.Add("categoryId", "Выберите категорию");
-                else if (!await db.Categories.AnyAsync(
-                             c => c.Id == catId && c.UserId == userId && c.Type == expectedCategoryType, ct))
-                    errors.Add("categoryId", "Категория не найдена");
-                categoryId = request.CategoryId;
-                break;
-
-            default:
-                errors.Add("type", "Неизвестный тип операции");
-                break;
-        }
-
-        // ---------- Описание ----------
-        var description = ValidationErrors.NormalizeText(request.Description);
-        if (description?.Length > 500)
-            errors.Add("description", "Описание длиннее 500 символов");
-
-        // ---------- Дата ----------
-        // +1 день запаса: у пользователя может быть другой часовой пояс, и у него "завтра" уже наступило.
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
-        if (request.Date > today.AddDays(1))
-            errors.Add("date", "Дата не может быть в будущем");
-        if (request.Date < new DateOnly(2000, 1, 1))
-            errors.Add("date", "Слишком старая дата");
-
-        if (errors.HasErrors)
-            return null;
-
-        return new ValidOperation(request.Type, request.Amount, request.AccountId, toAccountId, categoryId,
-            description, request.Date);
+        var deleted = await operations.DeleteAsync(principal.GetUserId(), id, ct);
+        return deleted ? Results.NoContent() : Results.NotFound();
     }
 }

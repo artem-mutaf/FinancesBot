@@ -31,6 +31,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.Property(u => u.FirstName).HasMaxLength(256);
             e.Property(u => u.Username).HasMaxLength(64);
             e.Property(u => u.Currency).HasConversion<string>().HasMaxLength(3);
+            e.Property(u => u.TimeZone).HasMaxLength(64);
         });
 
         // ---------- Account ----------

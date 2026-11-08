@@ -1,5 +1,6 @@
 using Telegram.Bot;
 using Telegram.Bot.Polling;
+using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 
 namespace FinancesTelegramBot.Bot;
@@ -27,10 +28,20 @@ public sealed class BotPollingService(
         // С dev-туннелем адрес появится позже, и кнопку обновит WebAppUrlProvider.SetAsync.
         await webAppUrl.UpdateMenuButtonAsync(stoppingToken);
 
+        // Команды в меню бота (кнопка "/" рядом с полем ввода)
+        await bot.SetMyCommands(
+        [
+            new BotCommand { Command = "start", Description = "Начать" },
+            new BotCommand { Command = "help", Description = "Как записывать операции" },
+        ], cancellationToken: stoppingToken);
+
         var receiverOptions = new ReceiverOptions
         {
-            AllowedUpdates = [UpdateType.Message], // пока нужны только сообщения
-            DropPendingUpdates = true              // не обрабатывать то, что пришло пока бот был выключен
+            // Сообщения (быстрый ввод) и нажатия inline-кнопок (выбор категории, отмена)
+            AllowedUpdates = [UpdateType.Message, UpdateType.CallbackQuery],
+            // НЕ выбрасываем то, что пришло, пока бот был выключен: "500 продукты",
+            // отправленное в это время, должно записаться (с датой отправки сообщения).
+            DropPendingUpdates = false,
         };
 
         // ReceiveAsync крутится в цикле, пока не отменят stoppingToken (остановка приложения).

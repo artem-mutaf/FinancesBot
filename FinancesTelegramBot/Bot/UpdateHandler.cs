@@ -2,60 +2,58 @@ using Telegram.Bot;
 using Telegram.Bot.Polling;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
-using Telegram.Bot.Types.ReplyMarkups;
 
 namespace FinancesTelegramBot.Bot;
 
 /// <summary>
-/// Обрабатывает входящие апдейты (сообщения, нажатия кнопок и т.д.) от Telegram.
-/// Библиотека Telegram.Bot вызывает HandleUpdateAsync для каждого апдейта.
+/// Точка входа для апдейтов от Telegram. Библиотека вызывает HandleUpdateAsync для каждого апдейта.
+///
+/// Сам UpdateHandler — Singleton (живёт всё время работы приложения), а AppDbContext — Scoped
+/// (один на "единицу работы"). Взять scoped-сервис в singleton напрямую нельзя: контекст БД
+/// жил бы вечно, копил бы отслеживаемые объекты и не был бы потокобезопасен.
+/// Поэтому на каждый апдейт создаём свой scope — так же, как ASP.NET делает на каждый HTTP-запрос.
 /// </summary>
 public sealed class UpdateHandler(
-    WebAppUrlProvider webAppUrl,
+    IServiceScopeFactory scopeFactory,
     ILogger<UpdateHandler> logger) : IUpdateHandler
 {
     public async Task HandleUpdateAsync(ITelegramBotClient bot, Update update, CancellationToken ct)
     {
-        // Pattern matching: нас пока интересуют только текстовые сообщения.
-        if (update is not { Message: { Text: { } text } message })
-            return;
+        // using — в конце метода scope уничтожится вместе со всеми scoped-сервисами (и DbContext'ом)
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var chat = scope.ServiceProvider.GetRequiredService<ChatHandler>();
 
-        logger.LogInformation("Сообщение от {UserId}: {Text}", message.From?.Id, text);
-
-        // Команда может прийти как "/start" или "/start@MyBot" — берём часть до '@'.
-        var command = text.Split(' ', '@')[0].ToLowerInvariant();
-
-        switch (command)
+        try
         {
-            case "/start":
-                await SendWelcomeAsync(bot, message.Chat.Id, ct);
-                break;
-            default:
-                await bot.SendMessage(message.Chat.Id,
-                    "Я понимаю только /start. Учёт ведётся в приложении — нажми кнопку ниже 👇",
-                    cancellationToken: ct);
-                break;
+            switch (update)
+            {
+                case { Message: { } message }:
+                    await chat.HandleMessageAsync(message, ct);
+                    break;
+                case { CallbackQuery: { } query }:
+                    await chat.HandleCallbackAsync(query, ct);
+                    break;
+            }
         }
-    }
-
-    private async Task SendWelcomeAsync(ITelegramBotClient bot, long chatId, CancellationToken ct)
-    {
-        const string text = "Привет! Я помогу вести учёт личных финансов.\n" +
-                            "Открой приложение, чтобы добавлять доходы и расходы.";
-
-        // Читаем адрес в момент отправки: с dev-туннелем он может меняться на ходу.
-        if (webAppUrl.Url is not { } url)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            logger.LogWarning("Адрес Mini App ещё не известен — кнопка не будет показана");
-            await bot.SendMessage(chatId, text, cancellationToken: ct);
-            return;
+            // Фильтр исключений "when": отмену (остановка приложения) не ловим — пусть летит дальше.
+            logger.LogError(ex, "Ошибка при обработке апдейта {UpdateId}", update.Id);
+
+            // Пользователь не должен остаться без ответа
+            var chatId = update.Message?.Chat.Id ?? update.CallbackQuery?.Message?.Chat.Id;
+            if (chatId is { } id)
+            {
+                try
+                {
+                    await bot.SendMessage(id, "😵 Что-то пошло не так. Попробуй ещё раз.", cancellationToken: ct);
+                }
+                catch (Exception sendError)
+                {
+                    logger.LogWarning(sendError, "Не удалось сообщить пользователю об ошибке");
+                }
+            }
         }
-
-        // Inline-кнопка типа web_app открывает Mini App прямо внутри Telegram.
-        var keyboard = new InlineKeyboardMarkup(
-            InlineKeyboardButton.WithWebApp("💰 Открыть учёт", new WebAppInfo { Url = url }));
-
-        await bot.SendMessage(chatId, text, replyMarkup: keyboard, cancellationToken: ct);
     }
 
     public Task HandleErrorAsync(ITelegramBotClient bot, Exception exception, HandleErrorSource source,

@@ -75,6 +75,10 @@ namespace FinancesTelegramBot.Data.Migrations
                         .HasMaxLength(256)
                         .HasColumnType("character varying(256)");
 
+                    b.Property<string>("TimeZone")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
                     b.Property<string>("Username")
                         .HasMaxLength(64)
                         .HasColumnType("character varying(64)");

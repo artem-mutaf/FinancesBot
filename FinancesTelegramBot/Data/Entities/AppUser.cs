@@ -24,6 +24,12 @@ public class AppUser
     /// </summary>
     public Currency Currency { get; set; } = Currency.RUB;
 
+    /// <summary>
+    /// Часовой пояс в формате IANA ("Europe/Chisinau"). Присылает Mini App из настроек телефона.
+    /// Нужен боту, чтобы "сегодня" и "вчера" считались по времени пользователя, а не сервера.
+    /// </summary>
+    public string? TimeZone { get; set; }
+
     /// <summary>Когда пользователь впервые открыл приложение. Всегда в UTC.</summary>
     public DateTime CreatedAt { get; set; }
 

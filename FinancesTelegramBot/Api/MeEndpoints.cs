@@ -27,11 +27,13 @@ public static class MeEndpoints
     ///  UserProvisioningService  — из DI-контейнера;
     ///  CancellationToken        — отменится, если клиент оборвал запрос.
     /// </summary>
+    /// <param name="timeZone">Необязательный, из query string — часовой пояс телефона ("Europe/Chisinau").</param>
     private static async Task<MeDto> GetMe(
-        ClaimsPrincipal principal, UserProvisioningService provisioning, CancellationToken ct)
+        ClaimsPrincipal principal, UserProvisioningService provisioning, CancellationToken ct,
+        string? timeZone = null)
     {
         var user = await provisioning.EnsureUserAsync(
-            principal.GetUserId(), principal.GetFirstName(), principal.GetUsername(), ct);
+            principal.GetUserId(), principal.GetFirstName(), principal.GetUsername(), ct, timeZone);
 
         return ToDto(user);
     }

@@ -39,6 +39,10 @@ builder.Services.AddProblemDetails();
 // ---------- Сервисы приложения ----------
 // Scoped, потому что зависит от AppDbContext (тоже Scoped).
 builder.Services.AddScoped<UserProvisioningService>();
+builder.Services.AddScoped<OperationService>(); // общая логика операций для API и бота
+
+// Кэш в памяти процесса: там бот держит операции, ждущие выбора категории.
+builder.Services.AddMemoryCache();
 
 // enum в JSON — строкой ("Card"), а не числом (0). Фронтенду так понятнее.
 // allowIntegerValues: false — иначе клиент мог бы прислать {"type": 42}, и в enum
@@ -52,6 +56,7 @@ builder.Services.AddSingleton<ITelegramBotClient>(sp =>
     new TelegramBotClient(sp.GetRequiredService<IOptions<BotOptions>>().Value.Token));
 builder.Services.AddSingleton<WebAppUrlProvider>();
 builder.Services.AddSingleton<UpdateHandler>();
+builder.Services.AddScoped<ChatHandler>(); // создаётся на каждый апдейт внутри UpdateHandler
 builder.Services.AddHostedService<BotPollingService>();
 
 // ---------- Dev-туннель (только при разработке) ----------
