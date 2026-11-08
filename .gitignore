@@ -1,0 +1,29 @@
+# ---------- Результаты сборки .NET ----------
+# Генерируются при каждой сборке — хранить их в git бессмысленно.
+bin/
+obj/
+*.user
+
+# ---------- IDE ----------
+# Личные настройки Rider/VS (раскладка окон, история и т.п.)
+.idea/**/workspace.xml
+.idea/**/tasks.xml
+.idea/**/usage.statistics.xml
+.idea/**/shelf/
+.idea/**/contentModel.xml
+.idea/**/dataSources/
+.idea/**/dataSources.local.xml
+.idea/**/dataSources.xml
+.vs/
+.vscode/
+
+# ---------- Секреты ----------
+# Основные секреты лежат в user-secrets (вне проекта), но на всякий случай:
+appsettings.*.local.json
+*.env
+.env*
+
+# ---------- Логи и мусор ОС ----------
+*.log
+Thumbs.db
+.DS_Store

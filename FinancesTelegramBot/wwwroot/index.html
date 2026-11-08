@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+    <title>Финансы</title>
+    <!-- Официальный SDK Telegram Mini Apps: даёт объект window.Telegram.WebApp -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header>
+    <p class="hint" id="greeting">Загрузка…</p>
+    <select id="currency" aria-label="Валюта" hidden>
+        <option value="RUB">₽ RUB</option>
+        <option value="UAH">₴ UAH</option>
+        <option value="USD">$ USD</option>
+        <option value="EUR">€ EUR</option>
+        <option value="MDL">L MDL</option>
+    </select>
+</header>
+
+<!--
+    Три "экрана" — просто блоки, из которых виден только один (атрибут hidden).
+    Содержимое строит app.js. Переходы назад — через нативную кнопку Telegram BackButton.
+-->
+<main id="screen-home" class="screen"></main>
+<main id="screen-operation" class="screen" hidden></main>
+<main id="screen-account" class="screen" hidden></main>
+
+<script src="app.js"></script>
+</body>
+</html>

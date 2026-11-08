@@ -1,0 +1,140 @@
+/* Telegram прокидывает цвета темы пользователя в CSS-переменные --tg-theme-*.
+   Используем их, чтобы Mini App выглядела "родной" и в светлой, и в тёмной теме.
+   Второе значение в var(...) — запасное, если открыть страницу вне Telegram. */
+:root {
+    --bg: var(--tg-theme-bg-color, #fff);
+    --text: var(--tg-theme-text-color, #000);
+    --hint: var(--tg-theme-hint-color, #8e8e93);
+    --card: var(--tg-theme-secondary-bg-color, #f2f2f5);
+    --accent: var(--tg-theme-button-color, #2481cc);
+    --accent-text: var(--tg-theme-button-text-color, #fff);
+    --link: var(--tg-theme-link-color, #2481cc);
+    --danger: var(--tg-theme-destructive-text-color, #e53935);
+    --success: #31a24c;
+    --separator: color-mix(in srgb, var(--hint) 25%, transparent);
+}
+
+* { box-sizing: border-box; }
+
+body {
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    margin: 0;
+    padding: 16px 16px 32px;
+    background: var(--bg);
+    color: var(--text);
+    -webkit-tap-highlight-color: transparent;
+}
+
+.hint { color: var(--hint); font-size: 14px; }
+.error { color: var(--danger); }
+.screen[hidden] { display: none; }
+
+/* ---------- Шапка ---------- */
+header {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 8px;
+}
+header .hint { margin: 0; }
+header select {
+    width: auto; font-size: 14px; font-weight: 600;
+    padding: 6px 10px; border-radius: 8px;
+}
+
+/* ---------- Главный экран ---------- */
+.total { font-size: 34px; font-weight: 700; margin: 2px 0 0; font-variant-numeric: tabular-nums; }
+
+.section-title {
+    font-size: 13px; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--hint); margin: 24px 4px 8px;
+}
+
+.list { background: var(--card); border-radius: 12px; overflow: hidden; }
+
+/* Строка списка — это <button>, чтобы она была кликабельной и доступной с клавиатуры */
+.row {
+    display: flex; align-items: center; gap: 12px;
+    width: 100%; padding: 12px 16px;
+    background: none; border: none; color: inherit; font: inherit; text-align: left;
+    cursor: pointer;
+}
+.row + .row { border-top: 1px solid var(--separator); }
+.row:active { background: var(--separator); }
+.row-icon { font-size: 22px; width: 28px; text-align: center; flex-shrink: 0; }
+.row-main { flex: 1; min-width: 0; }
+.row-title { font-weight: 600; }
+.row-subtitle {
+    color: var(--hint); font-size: 13px; margin-top: 2px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.amount { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.amount.income { color: var(--success); }
+.amount.transfer { color: var(--hint); }
+.negative { color: var(--danger); }
+
+.date-heading { color: var(--hint); font-size: 13px; padding: 14px 4px 6px; }
+.empty { color: var(--hint); text-align: center; padding: 24px 16px; white-space: pre-line; }
+
+.link-button {
+    background: none; border: none; padding: 12px 4px;
+    color: var(--link); font: inherit; cursor: pointer;
+}
+
+/* ---------- Формы ---------- */
+.form-title { font-size: 20px; font-weight: 700; margin: 8px 0 16px; }
+.form-error { color: var(--danger); margin: 0 4px 16px; white-space: pre-line; }
+
+.field { display: block; margin-bottom: 16px; }
+.field[hidden] { display: none; }
+.field-label { display: block; font-size: 13px; color: var(--hint); margin: 0 4px 6px; }
+
+input, select {
+    width: 100%;
+    font: inherit; font-size: 16px; /* 16px — иначе iOS зумит страницу при фокусе */
+    color: var(--text); background: var(--card);
+    border: 1px solid transparent; border-radius: 10px;
+    padding: 12px 14px; outline: none;
+    appearance: none;
+}
+select {
+    /* своя стрелка вместо системной (её убрали через appearance: none) */
+    background-image: linear-gradient(45deg, transparent 50%, var(--hint) 50%),
+                      linear-gradient(135deg, var(--hint) 50%, transparent 50%);
+    background-position: calc(100% - 18px) 50%, calc(100% - 13px) 50%;
+    background-size: 5px 5px;
+    background-repeat: no-repeat;
+    padding-right: 32px;
+}
+input:focus, select:focus { border-color: var(--accent); }
+.amount-input { font-size: 28px; font-weight: 700; }
+
+/* Переключатель Расход / Доход / Перевод */
+.segmented {
+    display: flex; gap: 2px;
+    background: var(--card); border-radius: 10px; padding: 3px; margin-bottom: 16px;
+}
+.segmented button {
+    flex: 1; padding: 8px;
+    border: none; border-radius: 8px; background: none;
+    color: var(--text); font: inherit; font-size: 14px; cursor: pointer;
+}
+.segmented button.active {
+    background: var(--bg); font-weight: 600;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, .15);
+}
+
+/* Категории — "чипсы" */
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip {
+    border: none; border-radius: 18px; padding: 8px 14px;
+    background: var(--card); color: var(--text);
+    font: inherit; font-size: 14px; cursor: pointer;
+}
+.chip.active { background: var(--accent); color: var(--accent-text); }
+
+.danger-button {
+    width: 100%; margin-top: 8px; padding: 12px;
+    border: none; border-radius: 10px;
+    background: var(--card); color: var(--danger);
+    font: inherit; font-weight: 600; cursor: pointer;
+}
