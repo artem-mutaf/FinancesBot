@@ -57,5 +57,5 @@ public static class MeEndpoints
         return Results.Ok(ToDto(user));
     }
 
-    private static MeDto ToDto(AppUser user) => new(user.Id, user.FirstName, user.Username, user.Currency);
+    internal static MeDto ToDto(AppUser user) => new(user.Id, user.FirstName, user.Username, user.Currency);
 }

@@ -1,5 +1,6 @@
 using FinancesTelegramBot.Data;
 using FinancesTelegramBot.Data.Entities;
+using Microsoft.EntityFrameworkCore;
 
 namespace FinancesTelegramBot.Api;
 
@@ -54,4 +55,27 @@ public static class Queries
             o.Category != null ? o.Category.Icon : null,
             o.Description,
             o.Date));
+
+    /// <summary>Сортировка "свежие сверху": по дате, внутри дня — по времени добавления.</summary>
+    public static IOrderedQueryable<Operation> OrderNewestFirst(this IQueryable<Operation> operations) =>
+        operations
+            .OrderByDescending(o => o.Date)
+            .ThenByDescending(o => o.CreatedAt)
+            .ThenByDescending(o => o.Id);
+
+    // ---------- Готовые запросы (их используют и отдельные эндпоинты, и /api/bootstrap) ----------
+
+    public static Task<List<AccountDto>> GetAccountDtosAsync(this AppDbContext db, long userId, CancellationToken ct) =>
+        db.Accounts
+            .Where(a => a.UserId == userId) // ВАЖНО: всегда фильтруем по текущему пользователю!
+            .OrderBy(a => a.Id)
+            .SelectAccountDtos(db)
+            .ToListAsync(ct);
+
+    public static Task<List<CategoryDto>> GetCategoryDtosAsync(this AppDbContext db, long userId, CancellationToken ct) =>
+        db.Categories
+            .Where(c => c.UserId == userId)
+            .OrderBy(c => c.Id) // порядок создания: новые категории — в конце своего списка
+            .Select(c => new CategoryDto(c.Id, c.Name, c.Type, c.Icon))
+            .ToListAsync(ct);
 }

@@ -49,10 +49,8 @@ public static class OperationsEndpoints
             query = query.Where(o => o.Date <= toDate);
 
         return await query
-            .OrderByDescending(o => o.Date)
-            .ThenByDescending(o => o.CreatedAt) // внутри одного дня — по времени добавления
-            .ThenByDescending(o => o.Id)
-            .Take(limit)                        // SQL LIMIT
+            .OrderNewestFirst()
+            .Take(limit) // SQL LIMIT
             .SelectOperationDtos()
             .ToListAsync(ct);
     }

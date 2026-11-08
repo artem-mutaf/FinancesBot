@@ -4,13 +4,25 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
     <title>Финансы</title>
+    <!--
+        defer: скрипт качается параллельно с разбором страницы и выполняется после него,
+        строго по порядку (сначала SDK, потом app.js). Без defer браузер останавливал бы
+        разбор HTML, пока не скачает SDK с telegram.org, — а это отдельный сервер и лишняя задержка.
+    -->
     <!-- Официальный SDK Telegram Mini Apps: даёт объект window.Telegram.WebApp -->
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="https://telegram.org/js/telegram-web-app.js" defer></script>
+    <script src="app.js" defer></script>
     <link rel="stylesheet" href="app.css">
 </head>
 <body>
 <header>
-    <p class="hint" id="greeting">Загрузка…</p>
+    <div class="hello">
+        <div class="avatar" id="avatar" aria-hidden="true"></div>
+        <div>
+            <div class="hello-hint">Личные финансы</div>
+            <div class="hello-name" id="greeting">Загрузка…</div>
+        </div>
+    </div>
     <select id="currency" aria-label="Валюта" hidden>
         <option value="RUB">₽ RUB</option>
         <option value="UAH">₴ UAH</option>
@@ -24,7 +36,16 @@
     "Экраны" — просто блоки, из которых виден только один (атрибут hidden).
     Содержимое строит app.js. Переходы назад — через нативную кнопку Telegram BackButton.
 -->
-<main id="screen-home" class="screen"></main>
+<main id="screen-home" class="screen">
+    <!-- Скелетон: мерцающие заглушки, пока грузятся данные. app.js заменит их настоящим содержимым. -->
+    <div class="skeleton skeleton-card"></div>
+    <div class="skeleton-row">
+        <div class="skeleton skeleton-pill"></div>
+        <div class="skeleton skeleton-pill"></div>
+        <div class="skeleton skeleton-pill"></div>
+    </div>
+    <div class="skeleton skeleton-list"></div>
+</main>
 <main id="screen-operation" class="screen" hidden></main>
 <main id="screen-account" class="screen" hidden></main>
 <main id="screen-categories" class="screen" hidden></main>
@@ -32,6 +53,5 @@
 <main id="screen-calendar" class="screen" hidden></main>
 <main id="screen-stats" class="screen" hidden></main>
 
-<script src="app.js"></script>
 </body>
 </html>

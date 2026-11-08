@@ -21,17 +21,9 @@ public static class CategoriesEndpoints
     }
 
     /// <summary>GET /api/categories — все категории пользователя (доходы и расходы).</summary>
-    private static async Task<List<CategoryDto>> GetCategories(
-        ClaimsPrincipal principal, AppDbContext db, CancellationToken ct)
-    {
-        var userId = principal.GetUserId();
-
-        return await db.Categories
-            .Where(c => c.UserId == userId)
-            .OrderBy(c => c.Id) // порядок создания: новые категории — в конце своего списка
-            .Select(c => new CategoryDto(c.Id, c.Name, c.Type, c.Icon))
-            .ToListAsync(ct);
-    }
+    private static Task<List<CategoryDto>> GetCategories(
+        ClaimsPrincipal principal, AppDbContext db, CancellationToken ct) =>
+        db.GetCategoryDtosAsync(principal.GetUserId(), ct);
 
     /// <summary>POST /api/categories — новая категория.</summary>
     private static async Task<IResult> CreateCategory(

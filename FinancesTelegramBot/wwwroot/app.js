@@ -19,6 +19,7 @@ const state = {
     accounts: [],
     categories: [],
     operations: [],
+    month: null,       // итоги текущего месяца { income, expense } — для карточки баланса
 };
 
 let money = createFormatter('RUB');
@@ -126,6 +127,95 @@ function haptic(type) {
 }
 
 // =====================================================================
+//  Анимации и мелкие UI-компоненты
+// =====================================================================
+
+/** Включено ли в системе "уменьшить движение". matchMedia — CSS media query из JS. */
+const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+/** Всплывающее уведомление сверху. Один элемент на всё приложение, показываем/прячем классом. */
+const toastNode = el('div', { className: 'toast', role: 'status' });
+document.body.append(toastNode);
+let toastTimer = 0;
+function toast(text) {
+    toastNode.textContent = text;
+    toastNode.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toastNode.classList.remove('show'), 1800);
+}
+
+/**
+ * Число "набегает" от from до to. requestAnimationFrame вызывает step перед каждой
+ * перерисовкой экрана (~60 раз в секунду) — так анимация плавная и не грузит телефон.
+ */
+function countUp(node, from, to, format, duration = 700) {
+    if (from === to || reduceMotion.matches) {
+        node.textContent = format(to);
+        return;
+    }
+    const start = performance.now();
+    const step = now => {
+        if (!node.isConnected) return; // экран перерисовали — эта анимация больше не нужна
+        const t = Math.min((now - start) / duration, 1);
+        const eased = 1 - Math.pow(1 - t, 3); // ease-out: быстро в начале, плавно в конце
+        node.textContent = format(from + (to - from) * eased);
+        if (t < 1) requestAnimationFrame(step);
+    };
+    node.textContent = format(from);
+    requestAnimationFrame(step);
+}
+
+/** Элементы появляются по очереди: CSS-класс + номер элемента в переменной --i (для задержки). */
+function stagger(nodes, offset = 0) {
+    nodes.forEach((node, i) => {
+        node.classList.add('animate-in');
+        node.style.setProperty('--i', Math.min(i + offset, 12)); // дальше 12-го — без лишнего ожидания
+    });
+    return nodes;
+}
+
+/**
+ * Переключатель с "ползунком" (Расход | Доход | Перевод).
+ * Возвращает сам элемент и функцию setActive — элемент НЕ пересоздаётся при переключении,
+ * поэтому CSS-переход ползунка успевает проиграться.
+ */
+function createSegmented(options, active, onSelect) {
+    const node = el('div', { className: 'segmented', role: 'group' });
+    node.style.setProperty('--count', options.length);
+    let current = null;
+
+    const buttons = options.map(([value, label]) => el('button', {
+        type: 'button',
+        onclick: () => {
+            if (value === current) return;
+            tg.HapticFeedback?.selectionChanged();
+            onSelect(value);
+        },
+    }, label));
+    node.append(...buttons);
+
+    function setActive(value) {
+        current = value;
+        const index = options.findIndex(([v]) => v === value);
+        node.style.setProperty('--index', index);
+        buttons.forEach((b, i) => {
+            b.classList.toggle('active', i === index);
+            b.setAttribute('aria-pressed', String(i === index));
+        });
+    }
+
+    setActive(active);
+    return { node, setActive };
+}
+
+/** Заголовок секции: "Счета" + ссылка-действие справа. */
+function sectionHeader(title, actionLabel, onAction) {
+    return el('div', { className: 'section-header' },
+        el('h2', {}, title),
+        actionLabel && el('button', { className: 'section-action', onclick: onAction }, actionLabel));
+}
+
+// =====================================================================
 //  API
 // =====================================================================
 
@@ -168,12 +258,19 @@ async function api(path, options = {}) {
 }
 
 /** Загружаем всё параллельно — Promise.all ждёт все запросы. */
-async function reloadData() {
-    [state.accounts, state.categories, state.operations] = await Promise.all([
-        api('/api/accounts'),
-        api('/api/categories'),
-        api('/api/operations?limit=50'),
-    ]);
+/**
+ * Все данные главного экрана — ОДНИМ запросом. Каждый запрос через сеть — это задержка
+ * "туда-обратно", поэтому один большой запрос быстрее пяти маленьких.
+ * timeZone передаём только при открытии приложения (сервер его запомнит).
+ */
+async function reloadData(timeZone = null) {
+    const query = timeZone ? `?timeZone=${encodeURIComponent(timeZone)}` : '';
+    const data = await api(`/api/bootstrap${query}`);
+    state.me = data.me;
+    state.accounts = data.accounts;
+    state.categories = data.categories;
+    state.operations = data.operations;
+    state.month = data.month;
 }
 
 // =====================================================================
@@ -210,7 +307,7 @@ function showScreen(name) {
  * на кнопке, показываем ошибку в форме, при успехе — перезагрузка данных, вибрация
  * и переход на экран goBack.
  */
-function makeSubmitHandler(errorNode, action, goBack = openHome) {
+function makeSubmitHandler(errorNode, action, goBack = openHome, successText = 'Сохранено') {
     let busy = false;
     return async () => {
         if (busy) return;
@@ -222,6 +319,7 @@ function makeSubmitHandler(errorNode, action, goBack = openHome) {
             if (done === false) return; // действие отменено (например, нажали "Нет" в подтверждении)
             await reloadData();
             haptic('success');
+            toast(`✓ ${successText}`);
             goBack();
         } catch (e) {
             errorNode.textContent = e.message;
@@ -245,50 +343,103 @@ function field(label, input, props = {}) {
 function openHome() {
     showScreen('home');
     setBackButton(null);
-    setMainButton(state.accounts.length > 0 ? 'Добавить операцию' : null, () => openOperationForm());
+    // Нижняя кнопка на главном больше не нужна — её заменили быстрые действия
+    setMainButton(null);
     renderHome();
 }
 
+/** Какая сумма сейчас показана на карточке баланса — чтобы анимировать от неё к новой. */
+let shownTotal = 0;
+
 function renderHome() {
     const total = state.accounts.reduce((sum, a) => sum + a.balance, 0);
+    const hasAccounts = state.accounts.length > 0;
+
+    // ---- Карточка баланса ----
+    const totalNode = el('div', { className: 'balance-value' });
+    countUp(totalNode, shownTotal, total, v => money.format(v));
+    shownTotal = total;
+
+    const monthLabel = new Intl.DateTimeFormat('ru-RU', { month: 'long' }).format(new Date());
+    const balanceCard = el('button', {
+        className: 'balance-card',
+        onclick: () => openStats({ reset: true }),
+        ariaLabel: `Общий баланс ${money.format(total)}. Открыть статистику`,
+    },
+        el('div', { className: 'balance-label' }, 'Общий баланс'),
+        totalNode,
+        state.month && el('div', { className: 'balance-month' },
+            balanceStat('↓', `Расходы, ${monthLabel}`, money.format(state.month.expense)),
+            balanceStat('↑', `Доходы, ${monthLabel}`, money.format(state.month.income))),
+    );
+
+    // ---- Быстрые действия ----
+    const quickActions = hasAccounts && el('div', { className: 'quick-actions' },
+        stagger([
+            quickAction('−', 'Расход', 'expense', () => openOperationForm(null, { type: 'Expense' })),
+            quickAction('+', 'Доход', 'income', () => openOperationForm(null, { type: 'Income' })),
+            quickAction('⇄', 'Перевод', 'transfer', () => openOperationForm(null, { type: 'Transfer' })),
+        ], 1));
+
+    // ---- Счета: лента карточек ----
+    const accountCards = [
+        ...state.accounts.map(renderAccountCard),
+        el('button', { className: 'account-card add', onclick: () => openAccountForm(null) },
+            el('span', {}, '+'), el('span', {}, 'Счёт')),
+    ];
 
     screens.home.replaceChildren(
-        el('div', { className: 'hint' }, 'Всего'),
-        el('div', { className: 'total' + (total < 0 ? ' negative' : '') }, money.format(total)),
+        balanceCard,
+        quickActions,
 
-        el('div', { className: 'section-title' }, 'Счета'),
-        state.accounts.length > 0
-            ? el('div', { className: 'list' }, state.accounts.map(renderAccountRow))
-            : el('div', { className: 'empty' }, 'Счетов пока нет'),
-        el('button', { className: 'link-button', onclick: () => openAccountForm(null) }, '+ Новый счёт'),
+        sectionHeader('Счета', hasAccounts ? 'Добавить' : null, () => openAccountForm(null)),
+        el('div', { className: 'accounts-scroll' }, stagger(accountCards, 2)),
 
         el('div', { className: 'nav-tiles' },
             navTile('📅', 'Календарь', () => openCalendar({ reset: true })),
             navTile('📊', 'Статистика', () => openStats({ reset: true })),
             navTile('🏷️', 'Категории', openCategories)),
 
-        el('div', { className: 'section-title' }, 'Последние операции'),
+        sectionHeader('Последние операции'),
         renderOperations(),
     );
+}
+
+function balanceStat(icon, label, value) {
+    return el('div', { className: 'balance-stat' },
+        el('div', { className: 'balance-stat-label' },
+            el('span', { className: 'balance-stat-icon' }, icon), label),
+        el('div', { className: 'balance-stat-value' }, value));
+}
+
+function quickAction(icon, label, kind, onclick) {
+    return el('button', { className: `quick-action ${kind}`, onclick },
+        el('span', { className: 'quick-action-icon' }, icon),
+        el('span', {}, label));
 }
 
 function navTile(icon, label, onclick) {
     return el('button', { className: 'nav-tile', onclick }, el('span', {}, icon), el('span', {}, label));
 }
 
-function renderAccountRow(account) {
-    return el('button', { className: 'row', onclick: () => openAccountForm(account) },
+function renderAccountCard(account) {
+    return el('button', { className: 'account-card', onclick: () => openAccountForm(account) },
         el('span', { className: 'row-icon' }, ACCOUNT_ICONS[account.type] ?? '💰'),
-        el('div', { className: 'row-main' },
-            el('div', { className: 'row-title' }, account.name)),
-        el('span', { className: 'amount' + (account.balance < 0 ? ' negative' : '') },
-            money.format(account.balance)),
+        el('div', { style: 'width: 100%' },
+            el('div', { className: 'account-name' }, account.name),
+            el('div', { className: 'account-balance' + (account.balance < 0 ? ' negative' : '') },
+                money.format(account.balance))),
     );
 }
 
 function renderOperations() {
-    if (state.operations.length === 0)
-        return el('div', { className: 'empty' }, 'Операций пока нет.\nНажми «Добавить операцию» внизу.');
+    if (state.operations.length === 0) {
+        return el('div', { className: 'empty' },
+            el('span', { className: 'empty-icon' }, '🧾'),
+            state.accounts.length > 0
+                ? 'Операций пока нет.\nНажми «Расход» или «Доход» выше\nили напиши боту в чат: 500 продукты'
+                : 'Сначала добавь счёт');
+    }
 
     // Операции уже отсортированы сервером по дате; вставляем заголовок при смене дня.
     const nodes = [];
@@ -302,7 +453,8 @@ function renderOperations() {
         }
         currentList.append(renderOperationRow(op));
     }
-    return el('div', {}, nodes);
+    // По очереди появляются заголовки дат и карточки-списки (после карточек счетов)
+    return el('div', {}, stagger(nodes, 4));
 }
 
 /**
@@ -339,7 +491,7 @@ function renderOperationRow(op, onOpen = () => openOperationForm(op)) {
 
     // Нажатие на операцию — открыть её для редактирования
     return el('button', { className: 'row', onclick: onOpen },
-        el('span', { className: 'row-icon' }, icon),
+        el('span', { className: `row-icon ${op.type.toLowerCase()}` }, icon),
         el('div', { className: 'row-main' },
             el('div', { className: 'row-title' }, title),
             el('div', { className: 'row-subtitle' }, subtitle)),
@@ -354,14 +506,14 @@ function renderOperationRow(op, onOpen = () => openOperationForm(op)) {
 //  date    — дата по умолчанию для новой операции (из календаря)
 //  goBack  — куда вернуться после сохранения / по кнопке "назад"
 // =====================================================================
-function openOperationForm(operation = null, { date = localIsoDate(0), goBack = openHome } = {}) {
+function openOperationForm(operation = null, { date = localIsoDate(0), goBack = openHome, type = 'Expense' } = {}) {
     const isNew = operation === null;
     showScreen('operation');
     setBackButton(goBack);
 
     // Локальное состояние формы. Замыкание: функции ниже "видят" эту переменную.
     const form = {
-        type: operation?.type ?? 'Expense',
+        type: operation?.type ?? type,
         categoryId: operation?.categoryId ?? null,
     };
 
@@ -369,15 +521,11 @@ function openOperationForm(operation = null, { date = localIsoDate(0), goBack = 
         el('option', { value: a.id }, `${ACCOUNT_ICONS[a.type] ?? ''} ${a.name} · ${money.format(a.balance)}`);
 
     // ---- Поля ----
-    const typeButtons = OPERATION_TYPES.map(([type, label]) => el('button', {
-        type: 'button',
-        onclick: () => {
-            if (form.type === type) return;
-            form.type = type;
-            form.categoryId = null; // категории у расхода и дохода разные — сбрасываем выбор
-            update();
-        },
-    }, label));
+    const typeSwitch = createSegmented(OPERATION_TYPES, form.type, value => {
+        form.type = value;
+        form.categoryId = null; // категории у расхода и дохода разные — сбрасываем выбор
+        update();
+    });
 
     const amountInput = el('input', {
         className: 'amount-input', inputMode: 'decimal', placeholder: '0', autocomplete: 'off',
@@ -411,12 +559,12 @@ function openOperationForm(operation = null, { date = localIsoDate(0), goBack = 
         onclick: makeSubmitHandler(errorNode, async () => {
             if (!await confirmAsync(`Удалить операцию на ${money.format(operation.amount)}?`)) return false;
             await api(`/api/operations/${operation.id}`, { method: 'DELETE' });
-        }, goBack),
+        }, goBack, 'Удалено'),
     }, 'Удалить операцию');
 
     screens.operation.replaceChildren(
         el('div', { className: 'form-title' }, isNew ? 'Новая операция' : 'Операция'),
-        el('div', { className: 'segmented' }, typeButtons),
+        typeSwitch.node,
         errorNode,
         field('Сумма', amountInput),
         el('label', { className: 'field' }, accountLabel, accountSelect),
@@ -429,7 +577,8 @@ function openOperationForm(operation = null, { date = localIsoDate(0), goBack = 
 
     /** Перерисовывает то, что зависит от типа операции. */
     function update() {
-        typeButtons.forEach((btn, i) => btn.classList.toggle('active', OPERATION_TYPES[i][0] === form.type));
+        typeSwitch.setActive(form.type);
+        screens.operation.dataset.type = form.type; // CSS красит сумму под тип операции
 
         const isTransfer = form.type === 'Transfer';
         accountLabel.textContent = { Expense: 'Со счёта', Income: 'На счёт', Transfer: 'Со счёта' }[form.type];
@@ -438,11 +587,19 @@ function openOperationForm(operation = null, { date = localIsoDate(0), goBack = 
 
         if (!isTransfer) {
             const categories = state.categories.filter(c => c.type === form.type);
-            chips.replaceChildren(...categories.map(c => el('button', {
-                type: 'button',
-                className: 'chip' + (c.id === form.categoryId ? ' active' : ''),
-                onclick: () => { form.categoryId = c.id; tg.HapticFeedback?.selectionChanged(); update(); },
-            }, `${categoryIcon(c.icon)} ${c.name}`)));
+            // Чипсы НЕ пересоздаём при выборе — только переключаем класс, иначе "мигнут" все сразу.
+            chips.replaceChildren(...categories.map(c => {
+                const chip = el('button', {
+                    type: 'button',
+                    className: 'chip' + (c.id === form.categoryId ? ' active' : ''),
+                    onclick: () => {
+                        form.categoryId = c.id;
+                        tg.HapticFeedback?.selectionChanged();
+                        for (const other of chips.children) other.classList.toggle('active', other === chip);
+                    },
+                }, `${categoryIcon(c.icon)} ${c.name}`);
+                return chip;
+            }));
         }
     }
 
@@ -498,7 +655,7 @@ function openAccountForm(account) {
         onclick: makeSubmitHandler(errorNode, async () => {
             if (!await confirmAsync(`Удалить счёт «${account.name}»?`)) return false;
             await api(`/api/accounts/${account.id}`, { method: 'DELETE' });
-        }),
+        }, openHome, 'Счёт удалён'),
     }, 'Удалить счёт');
 
     screens.account.replaceChildren(
@@ -545,7 +702,7 @@ function openCategories() {
             el('div', { className: 'section-title' }, title),
             el('div', { className: 'list' }, items.map(c =>
                 el('button', { className: 'row', onclick: () => openCategoryForm(c, c.type) },
-                    el('span', { className: 'row-icon' }, categoryIcon(c.icon)),
+                    el('span', { className: `row-icon ${c.type.toLowerCase()}` }, categoryIcon(c.icon)),
                     el('div', { className: 'row-main' }, el('div', { className: 'row-title' }, c.name))))),
             el('button', { className: 'link-button', onclick: () => openCategoryForm(null, type) },
                 '+ Добавить категорию'),
@@ -615,7 +772,7 @@ function openCategoryForm(category, type) {
                 }
                 throw e;
             }
-        }, openCategories),
+        }, openCategories, 'Категория удалена'),
     }, 'Удалить категорию');
 
     screens.category.replaceChildren(
@@ -853,6 +1010,8 @@ const stats = {
     data: null,        // ответ /api/stats
     loading: false,
     token: 0,          // защита от гонки ответов, как в календаре
+    headerSlot: null,  // контейнеры экрана (создаются в openStats)
+    bodySlot: null,
 };
 
 function monthName(year, month, format = 'long') {
@@ -871,6 +1030,16 @@ function openStats({ reset = false } = {}) {
         stats.year = now.getFullYear();
         stats.month = now.getMonth() + 1;
     }
+
+    const typeSwitch = createSegmented([['Expense', 'Расходы'], ['Income', 'Доходы']], stats.type, value => {
+        stats.type = value;
+        typeSwitch.setActive(value);
+        renderStats(); // данные уже есть (сервер прислал и расходы, и доходы) — просто перерисовать
+    });
+    stats.headerSlot = el('div');
+    stats.bodySlot = el('div');
+    screens.stats.replaceChildren(stats.headerSlot, typeSwitch.node, stats.bodySlot);
+
     showScreen('stats');
     setBackButton(openHome);
     setMainButton(null);
@@ -923,29 +1092,21 @@ function renderStats() {
             : el('button', { className: 'cal-nav', onclick: () => shiftStatsMonth(1), ariaLabel: 'Следующий месяц' }, '›'),
     );
 
-    const typeSwitch = el('div', { className: 'segmented' },
-        [['Expense', 'Расходы'], ['Income', 'Доходы']].map(([value, label]) => el('button', {
-            type: 'button',
-            className: value === type ? 'active' : '',
-            onclick: () => {
-                if (stats.type === value) return;
-                stats.type = value;
-                tg.HapticFeedback?.selectionChanged();
-                renderStats(); // данные уже есть (сервер прислал и расходы, и доходы) — просто перерисовать
-            },
-        }, label)));
+    // Экран собран из трёх частей. Переключатель — один и тот же элемент (не пересоздаётся),
+    // поэтому его ползунок плавно переезжает. Заголовок и тело перерисовываем.
+    stats.headerSlot.replaceChildren(header);
 
-    // Данные ещё ни разу не загружались
+    // Данные ещё ни разу не загружались — мерцающие заглушки
     if (!data) {
-        screens.stats.replaceChildren(header, typeSwitch, el('div', { className: 'empty' }, 'Загрузка…'));
+        stats.bodySlot.replaceChildren(
+            el('div', { className: 'skeleton', style: 'height: 110px' }),
+            el('div', { className: 'skeleton skeleton-list' }));
         return;
     }
 
     const pick = totals => isExpense ? totals.expense : totals.income;
 
-    screens.stats.replaceChildren(
-        header,
-        typeSwitch,
+    stats.bodySlot.replaceChildren(
         el('div', { className: 'stats-body' + (stats.loading ? ' loading' : '') },
             renderStatsHero(data, isExpense, pick),
             el('div', { className: 'section-title' }, 'По категориям'),
@@ -1035,7 +1196,7 @@ function renderTrend(trend, pick) {
         style: 'currency', currency: state.me.currency, notation: 'compact', maximumFractionDigits: 1,
     });
 
-    return el('div', { className: 'trend' }, trend.map(m => {
+    return el('div', { className: 'trend' }, trend.map((m, index) => {
         const value = pick(m);
         const isSelected = m.year === stats.year && m.month === stats.month;
         const heightPercent = max > 0 ? value / max * 100 : 0;
@@ -1050,7 +1211,7 @@ function renderTrend(trend, pick) {
             el('div', { className: 'trend-value' }, isSelected && value > 0 ? compact.format(value) : ''),
             el('div', { className: 'trend-area' },
                 // Ненулевое значение — минимум 2px, чтобы маленькая сумма не исчезла совсем
-                value > 0 && el('div', { className: 'trend-bar', style: `height: max(2px, ${heightPercent}%)` })),
+                value > 0 && el('div', { className: 'trend-bar', style: `height: max(2px, ${heightPercent}%); --i: ${index}` })),
             el('div', { className: 'trend-label' }, monthName(m.year, m.month, 'short').replace('.', '')),
         );
     }));
@@ -1084,21 +1245,36 @@ currencySelect.addEventListener('change', async () => {
 // =====================================================================
 //  Старт
 // =====================================================================
+/** Аватар: первая буква имени, а поверх — фото из Telegram (если клиент его передал). */
+function renderAvatar(firstName) {
+    const avatar = document.getElementById('avatar');
+    avatar.textContent = (firstName?.[0] ?? '?').toUpperCase();
+
+    // initDataUnsafe — те же данные, что в initData, но уже разобранные. "Unsafe" — потому что
+    // НЕ проверены: для показа картинки годится, а для решений о доступе — только сервер.
+    const photoUrl = tg.initDataUnsafe?.user?.photo_url;
+    if (photoUrl) {
+        const img = el('img', { src: photoUrl, alt: '' });
+        img.addEventListener('error', () => img.remove()); // не загрузилось — останется буква
+        avatar.append(img);
+    }
+}
+
 async function init() {
     if (!tg.initData) {
         greeting.textContent = 'Открой приложение через бота в Telegram.';
+        screens.home.replaceChildren(); // убираем заглушки-скелетоны
         return;
     }
     try {
         // Создаст пользователя при первом входе. Заодно сообщаем серверу часовой пояс телефона —
         // по нему бот считает "сегодня" и "вчера" при быстром вводе в чате.
-        const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-        state.me = await api(`/api/me?timeZone=${encodeURIComponent(timeZone)}`);
+        await reloadData(Intl.DateTimeFormat().resolvedOptions().timeZone);
+
         greeting.textContent = `Привет, ${state.me.firstName}!`;
+        renderAvatar(state.me.firstName);
         applyCurrency(state.me.currency);
         currencySelect.hidden = false;
-
-        await reloadData();
         openHome();
     } catch (e) {
         screens.home.replaceChildren(el('p', { className: 'error' }, `Ошибка: ${e.message}`));

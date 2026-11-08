@@ -22,17 +22,9 @@ public static class AccountsEndpoints
     }
 
     /// <summary>GET /api/accounts — счета текущего пользователя с балансом.</summary>
-    private static async Task<List<AccountDto>> GetAccounts(
-        ClaimsPrincipal principal, AppDbContext db, CancellationToken ct)
-    {
-        var userId = principal.GetUserId();
-
-        return await db.Accounts
-            .Where(a => a.UserId == userId) // ВАЖНО: всегда фильтруем по текущему пользователю!
-            .OrderBy(a => a.Id)
-            .SelectAccountDtos(db)
-            .ToListAsync(ct);
-    }
+    private static Task<List<AccountDto>> GetAccounts(
+        ClaimsPrincipal principal, AppDbContext db, CancellationToken ct) =>
+        db.GetAccountDtosAsync(principal.GetUserId(), ct);
 
     /// <summary>POST /api/accounts — новый счёт с текущим остатком.</summary>
     private static async Task<IResult> CreateAccount(

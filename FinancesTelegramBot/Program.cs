@@ -5,6 +5,7 @@ using FinancesTelegramBot.Bot;
 using FinancesTelegramBot.Data;
 using FinancesTelegramBot.Services;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.ResponseCompression;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Telegram.Bot;
@@ -44,6 +45,26 @@ builder.Services.AddScoped<OperationService>(); // общая логика оп�
 // Кэш в памяти процесса: там бот держит операции, ждущие выбора категории.
 builder.Services.AddMemoryCache();
 
+// ---------- Производительность ----------
+// Прогрев EF Core при запуске — чтобы первый пользователь не ждал лишнюю секунду.
+builder.Services.AddHostedService<WarmupService>();
+
+// Сжатие ответов: app.js 60 КБ -> ~15 КБ, JSON — в 4-8 раз меньше.
+// Через медленную сеть (туннель, мобильный интернет) это заметно ускоряет загрузку.
+builder.Services.AddResponseCompression(options =>
+{
+    // Сжимать и по HTTPS. Обычно по HTTPS это выключено из-за атаки BREACH, но она
+    // опасна, когда браузер сам подставляет секрет (cookie) в запросы с чужого сайта.
+    // У нас авторизация — заголовок Authorization, который подставляет только наш JS.
+    options.EnableForHttps = true;
+    options.Providers.Add<BrotliCompressionProvider>(); // Brotli жмёт лучше gzip
+    options.Providers.Add<GzipCompressionProvider>();   // запасной — для старых клиентов
+});
+// Уровень сжатия: по умолчанию Fastest (быстро, но слабо). Optimal жмёт заметно сильнее,
+// а на наших объёмах (десятки КБ) стоит лишь доли миллисекунды процессора.
+builder.Services.Configure<BrotliCompressionProviderOptions>(o => o.Level = System.IO.Compression.CompressionLevel.Optimal);
+builder.Services.Configure<GzipCompressionProviderOptions>(o => o.Level = System.IO.Compression.CompressionLevel.Optimal);
+
 // enum в JSON — строкой ("Card"), а не числом (0). Фронтенду так понятнее.
 // allowIntegerValues: false — иначе клиент мог бы прислать {"type": 42}, и в enum
 // попало бы несуществующее значение. Теперь принимаются только имена из enum, остальное — 400.
@@ -72,12 +93,20 @@ var app = builder.Build();
 
 // ---------- HTTP pipeline ----------
 // Порядок middleware важен: запрос проходит их сверху вниз.
+app.UseResponseCompression(); // до остальных — чтобы сжимать их ответы
 app.UseDefaultFiles();   // "/" -> "/index.html"
-app.UseStaticFiles();    // отдаём файлы из wwwroot (это и есть Mini App)
+app.UseStaticFiles(new StaticFileOptions // отдаём файлы из wwwroot (это и есть Mini App)
+{
+    // "no-cache" — это НЕ "не кэшировать". Это "кэшируй, но перед использованием спроси сервер,
+    // не изменился ли файл". Сервер сверит ETag (отпечаток файла) и ответит 304 Not Modified
+    // без тела — файл не скачивается заново. А после обновления app.js телефон сразу получит новый.
+    OnPrepareResponse = ctx => ctx.Context.Response.Headers.CacheControl = "no-cache",
+});
 app.UseAuthentication(); // кто ты? (заполняет HttpContext.User)
 app.UseAuthorization();  // можно ли тебе сюда? (проверяет RequireAuthorization)
 
 app.MapGet("/api/health", () => Results.Ok(new { status = "ok", time = DateTime.UtcNow }));
+app.MapBootstrapEndpoints();
 app.MapMeEndpoints();
 app.MapAccountsEndpoints();
 app.MapCategoriesEndpoints();
