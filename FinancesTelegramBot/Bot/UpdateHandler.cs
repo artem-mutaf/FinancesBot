@@ -1,4 +1,3 @@
-using Microsoft.Extensions.Options;
 using Telegram.Bot;
 using Telegram.Bot.Polling;
 using Telegram.Bot.Types;
@@ -12,11 +11,9 @@ namespace FinancesTelegramBot.Bot;
 /// Библиотека Telegram.Bot вызывает HandleUpdateAsync для каждого апдейта.
 /// </summary>
 public sealed class UpdateHandler(
-    IOptions<BotOptions> options,
+    WebAppUrlProvider webAppUrl,
     ILogger<UpdateHandler> logger) : IUpdateHandler
 {
-    private readonly BotOptions _options = options.Value;
-
     public async Task HandleUpdateAsync(ITelegramBotClient bot, Update update, CancellationToken ct)
     {
         // Pattern matching: нас пока интересуют только текстовые сообщения.
@@ -46,16 +43,17 @@ public sealed class UpdateHandler(
         const string text = "Привет! Я помогу вести учёт личных финансов.\n" +
                             "Открой приложение, чтобы добавлять доходы и расходы.";
 
-        if (string.IsNullOrWhiteSpace(_options.WebAppUrl))
+        // Читаем адрес в момент отправки: с dev-туннелем он может меняться на ходу.
+        if (webAppUrl.Url is not { } url)
         {
-            logger.LogWarning("Bot:WebAppUrl не задан — кнопка Mini App не будет показана");
+            logger.LogWarning("Адрес Mini App ещё не известен — кнопка не будет показана");
             await bot.SendMessage(chatId, text, cancellationToken: ct);
             return;
         }
 
         // Inline-кнопка типа web_app открывает Mini App прямо внутри Telegram.
         var keyboard = new InlineKeyboardMarkup(
-            InlineKeyboardButton.WithWebApp("💰 Открыть учёт", new WebAppInfo { Url = _options.WebAppUrl }));
+            InlineKeyboardButton.WithWebApp("💰 Открыть учёт", new WebAppInfo { Url = url }));
 
         await bot.SendMessage(chatId, text, replyMarkup: keyboard, cancellationToken: ct);
     }

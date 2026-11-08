@@ -50,8 +50,18 @@ builder.Services.ConfigureHttpJsonOptions(o =>
 // Singleton: один клиент на всё приложение (внутри у него HttpClient, его не нужно создавать заново).
 builder.Services.AddSingleton<ITelegramBotClient>(sp =>
     new TelegramBotClient(sp.GetRequiredService<IOptions<BotOptions>>().Value.Token));
+builder.Services.AddSingleton<WebAppUrlProvider>();
 builder.Services.AddSingleton<UpdateHandler>();
 builder.Services.AddHostedService<BotPollingService>();
+
+// ---------- Dev-туннель (только при разработке) ----------
+// Сам поднимает HTTPS-туннель и подставляет его адрес в бота. Включается в appsettings.Development.json.
+builder.Services.Configure<DevTunnelOptions>(builder.Configuration.GetSection(DevTunnelOptions.SectionName));
+if (builder.Environment.IsDevelopment() &&
+    builder.Configuration.GetValue<bool>($"{DevTunnelOptions.SectionName}:Enabled"))
+{
+    builder.Services.AddHostedService<DevTunnelService>();
+}
 
 var app = builder.Build();
 

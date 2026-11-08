@@ -1,7 +1,5 @@
-using Microsoft.Extensions.Options;
 using Telegram.Bot;
 using Telegram.Bot.Polling;
-using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 
 namespace FinancesTelegramBot.Bot;
@@ -17,7 +15,7 @@ namespace FinancesTelegramBot.Bot;
 public sealed class BotPollingService(
     ITelegramBotClient bot,
     UpdateHandler handler,
-    IOptions<BotOptions> options,
+    WebAppUrlProvider webAppUrl,
     ILogger<BotPollingService> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -25,7 +23,9 @@ public sealed class BotPollingService(
         var me = await bot.GetMe(stoppingToken);
         logger.LogInformation("Бот @{Username} запущен", me.Username);
 
-        await ConfigureMenuButtonAsync(stoppingToken);
+        // Если адрес задан в настройках — сразу ставим кнопку меню.
+        // С dev-туннелем адрес появится позже, и кнопку обновит WebAppUrlProvider.SetAsync.
+        await webAppUrl.UpdateMenuButtonAsync(stoppingToken);
 
         var receiverOptions = new ReceiverOptions
         {
@@ -35,19 +35,5 @@ public sealed class BotPollingService(
 
         // ReceiveAsync крутится в цикле, пока не отменят stoppingToken (остановка приложения).
         await bot.ReceiveAsync(handler, receiverOptions, stoppingToken);
-    }
-
-    /// <summary>
-    /// Кнопка "меню" слева от поля ввода — тоже открывает Mini App.
-    /// </summary>
-    private async Task ConfigureMenuButtonAsync(CancellationToken ct)
-    {
-        var url = options.Value.WebAppUrl;
-        if (string.IsNullOrWhiteSpace(url))
-            return;
-
-        await bot.SetChatMenuButton(
-            menuButton: new MenuButtonWebApp { Text = "Финансы", WebApp = new WebAppInfo { Url = url } },
-            cancellationToken: ct);
     }
 }
