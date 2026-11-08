@@ -18,6 +18,9 @@ builder.Services.AddOptions<BotOptions>()
     .Bind(builder.Configuration.GetSection(BotOptions.SectionName))
     .Validate(o => !string.IsNullOrWhiteSpace(o.Token),
         "Не задан Bot:Token. Выполни: dotnet user-secrets set \"Bot:Token\" \"<токен>\"")
+    // Telegram открывает Mini App только по HTTPS — ловим опечатку в настройках сразу при запуске
+    .Validate(o => string.IsNullOrEmpty(o.WebAppUrl) || o.WebAppUrl.StartsWith("https://"),
+        "Bot:WebAppUrl должен начинаться с https://")
     .ValidateOnStart();
 
 // ---------- База данных ----------
@@ -112,5 +115,16 @@ app.MapAccountsEndpoints();
 app.MapCategoriesEndpoints();
 app.MapOperationsEndpoints();
 app.MapStatsEndpoints();
+
+// ---------- Миграции БД при запуске ----------
+// На сервере некому запускать "dotnet ef database update" руками, поэтому приложение
+// само применяет недостающие миграции перед стартом. Уже применённые пропускаются
+// (EF помнит их в таблице __EFMigrationsHistory), так что повторный запуск безопасен.
+// Scope нужен, потому что AppDbContext — Scoped, а мы сейчас вне HTTP-запроса.
+await using (var scope = app.Services.CreateAsyncScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    await db.Database.MigrateAsync();
+}
 
 app.Run();

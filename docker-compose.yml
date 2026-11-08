@@ -1,0 +1,96 @@
+# =====================================================================
+#  Всё приложение одной командой:  docker compose up -d --build
+#
+#  Сервисы (каждый — отдельный контейнер):
+#    db      — PostgreSQL, данные хранятся в томе db-data (переживают пересоздание контейнера)
+#    app     — наше приложение (бот + API + Mini App)
+#    caddy   — веб-сервер: получает HTTPS-сертификат и передаёт запросы в app
+#    backup  — раз в сутки делает копию базы в папку ./backups
+#
+#  Секреты (токен, пароль, домен) — в файле .env рядом (в git не попадает, образец — .env.example).
+#  ${VAR:?текст} — если переменная не задана, compose остановится с этим сообщением.
+# =====================================================================
+name: finances
+
+# Ограничение логов Docker: по умолчанию они растут бесконечно и могут забить диск маленького сервера.
+# "x-" — пользовательский блок, "&logging" — якорь YAML, "*logging" ниже — ссылка на него.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  db:
+    image: postgres:18
+    restart: unless-stopped   # перезапускать после сбоя и после перезагрузки сервера
+    environment:
+      POSTGRES_DB: finances
+      POSTGRES_USER: finances
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Задай POSTGRES_PASSWORD в .env}
+    volumes:
+      # С PostgreSQL 18 том подключают к /var/lib/postgresql (а не к .../data, как раньше)
+      - db-data:/var/lib/postgresql
+    healthcheck:
+      # "Готова ли база принимать подключения?" — app не стартует, пока ответ не "да"
+      test: ["CMD-SHELL", "pg_isready -U finances -d finances"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    logging: *logging
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      # Двойное подчёркивание "__" = двоеточие в конфигурации: Bot__Token -> Bot:Token
+      Bot__Token: ${BOT_TOKEN:?Задай BOT_TOKEN в .env}
+      Bot__WebAppUrl: https://${DOMAIN:?Задай DOMAIN в .env}
+      # "db" — имя сервиса выше: внутри сети Docker это и есть адрес базы
+      ConnectionStrings__Default: Host=db;Database=finances;Username=finances;Password=${POSTGRES_PASSWORD}
+      # Режим сборщика мусора "workstation": заметно меньше памяти — важно на сервере с 1 ГБ
+      DOTNET_gcServer: "0"
+    logging: *logging
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"     # нужен Let's Encrypt для проверки домена и для редиректа на HTTPS
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro   # :ro — только чтение
+      - caddy-data:/data       # здесь Caddy хранит сертификаты (чтобы не получать их заново)
+      - caddy-config:/config
+    logging: *logging
+
+  backup:
+    image: postgres:18          # тот же образ — в нём уже есть pg_dump нужной версии
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # Стандартные переменные libpq: pg_dump возьмёт адрес и пароль из них
+      PGHOST: db
+      PGUSER: finances
+      PGDATABASE: finances
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ./deploy/backup.sh:/backup.sh:ro
+      - ./backups:/backups
+    entrypoint: ["/bin/sh", "/backup.sh"]
+    logging: *logging
+
+volumes:
+  db-data:
+  caddy-data:
+  caddy-config:

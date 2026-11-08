@@ -2,3 +2,8 @@
 # при checkout на Windows — CRLF. Убирает предупреждения "LF will be replaced by CRLF"
 # и мусорные диффы, когда разные редакторы ставят разные переводы строк.
 * text=auto
+
+# Файлы, которые выполняются в Linux-контейнерах, — всегда с LF, даже на Windows.
+# С CRLF shell-скрипт падает с загадочной ошибкой "\r: not found".
+*.sh text eol=lf
+deploy/Caddyfile text eol=lf
