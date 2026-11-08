@@ -132,6 +132,53 @@ input:focus, select:focus { border-color: var(--accent); }
 }
 .chip.active { background: var(--accent); color: var(--accent-text); }
 
+/* Выбор иконки категории — сетка эмодзи */
+.icon-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 6px; }
+.icon-choice {
+    aspect-ratio: 1; font-size: 22px; padding: 0;
+    border: 2px solid transparent; border-radius: 10px;
+    background: var(--card); cursor: pointer;
+}
+.icon-choice.active { border-color: var(--accent); }
+
+/* Ряд ссылок под списком счетов */
+.links { display: flex; justify-content: space-between; flex-wrap: wrap; }
+
+/* ---------- Календарь ---------- */
+.cal-header { display: flex; align-items: center; justify-content: space-between; margin: 8px 0 12px; }
+.cal-title { font-size: 18px; font-weight: 700; }
+.cal-nav {
+    width: 40px; height: 40px; font-size: 22px; line-height: 1;
+    border: none; border-radius: 10px; background: var(--card); color: var(--text); cursor: pointer;
+}
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+.cal-weekday { text-align: center; font-size: 12px; color: var(--hint); padding-bottom: 4px; }
+.cal-day {
+    aspect-ratio: 1; padding: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+    border: none; border-radius: 10px; background: none;
+    color: var(--text); font: inherit; font-size: 15px; cursor: pointer;
+}
+.cal-day.today { font-weight: 700; color: var(--accent); }
+.cal-day.selected { background: var(--accent); color: var(--accent-text); }
+.cal-day.future { opacity: .4; }
+.cal-dots { display: flex; gap: 3px; height: 5px; }
+.dot { width: 5px; height: 5px; border-radius: 50%; }
+.dot.expense { background: var(--danger); }
+.dot.income { background: var(--success); }
+.dot.transfer { background: var(--hint); }
+.cal-day.selected .dot { box-shadow: 0 0 0 1px var(--accent-text); }
+
+/* Итоги месяца / дня: две колонки */
+.summary {
+    display: flex; gap: 12px; margin-top: 12px;
+    background: var(--card); border-radius: 12px; padding: 12px 16px;
+}
+.summary > div { flex: 1; }
+.summary .amount { font-size: 17px; }
+.day-title { font-size: 17px; font-weight: 700; margin: 24px 4px 0; }
+.day-title::first-letter { text-transform: uppercase; }
+
 .danger-button {
     width: 100%; margin-top: 8px; padding: 12px;
     border: none; border-radius: 10px;

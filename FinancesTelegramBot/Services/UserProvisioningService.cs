@@ -10,11 +10,18 @@ namespace FinancesTelegramBot.Services;
 /// </summary>
 public sealed class UserProvisioningService(AppDbContext db, ILogger<UserProvisioningService> logger)
 {
-    private static readonly string[] DefaultExpenseCategories =
-        ["Продукты", "Транспорт", "Кафе", "Дом", "Здоровье", "Развлечения", "Другое"];
+    // Массив кортежей (tuple): каждая запись — пара (название, иконка).
+    // Именованные элементы кортежа позволяют писать c.Name вместо c.Item1.
+    private static readonly (string Name, string Icon)[] DefaultExpenseCategories =
+    [
+        ("Продукты", "🛒"), ("Транспорт", "🚌"), ("Кафе", "☕"), ("Дом", "🏠"),
+        ("Здоровье", "💊"), ("Развлечения", "🎬"), ("Другое", "📦"),
+    ];
 
-    private static readonly string[] DefaultIncomeCategories =
-        ["Зарплата", "Подарки", "Другое"];
+    private static readonly (string Name, string Icon)[] DefaultIncomeCategories =
+    [
+        ("Зарплата", "💼"), ("Подарки", "🎁"), ("Другое", "💰"),
+    ];
 
     public async Task<AppUser> EnsureUserAsync(long id, string firstName, string? username, CancellationToken ct)
     {
@@ -52,8 +59,10 @@ public sealed class UserProvisioningService(AppDbContext db, ILogger<UserProvisi
             // "развернуть элементы последовательности внутрь списка".
             Categories =
             [
-                ..DefaultExpenseCategories.Select(n => new Category { Name = n, Type = CategoryType.Expense }),
-                ..DefaultIncomeCategories.Select(n => new Category { Name = n, Type = CategoryType.Income }),
+                ..DefaultExpenseCategories.Select(c =>
+                    new Category { Name = c.Name, Icon = c.Icon, Type = CategoryType.Expense }),
+                ..DefaultIncomeCategories.Select(c =>
+                    new Category { Name = c.Name, Icon = c.Icon, Type = CategoryType.Income }),
             ],
         };
 

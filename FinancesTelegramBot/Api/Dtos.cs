@@ -27,7 +27,12 @@ public sealed record CreateAccountRequest(string Name, AccountType Type, decimal
 public sealed record UpdateAccountRequest(string Name, decimal Balance);
 
 // ---------- Категории ----------
-public sealed record CategoryDto(int Id, string Name, CategoryType Type);
+public sealed record CategoryDto(int Id, string Name, CategoryType Type, string? Icon);
+
+public sealed record CreateCategoryRequest(string Name, CategoryType Type, string? Icon);
+
+/// <summary>Тип категории не меняется: иначе операции-расходы оказались бы в категории доходов.</summary>
+public sealed record UpdateCategoryRequest(string Name, string? Icon);
 
 // ---------- Операции ----------
 public sealed record OperationDto(
@@ -40,10 +45,15 @@ public sealed record OperationDto(
     string? ToAccountName,
     int? CategoryId,
     string? CategoryName,
+    string? CategoryIcon,
     string? Description,
     DateOnly Date);
 
-public sealed record CreateOperationRequest(
+/// <summary>Итоги одного дня для календаря. Count включает и переводы (у них нет дохода/расхода).</summary>
+public sealed record DaySummaryDto(DateOnly Date, decimal Income, decimal Expense, int Count);
+
+/// <summary>Одно и то же тело для создания (POST) и редактирования (PUT) операции.</summary>
+public sealed record OperationRequest(
     OperationType Type,
     decimal Amount,
     int AccountId,

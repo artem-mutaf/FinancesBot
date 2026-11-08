@@ -21,16 +21,25 @@ const screens = {
     home: document.getElementById('screen-home'),
     operation: document.getElementById('screen-operation'),
     account: document.getElementById('screen-account'),
+    categories: document.getElementById('screen-categories'),
+    category: document.getElementById('screen-category'),
+    calendar: document.getElementById('screen-calendar'),
 };
 const greeting = document.getElementById('greeting');
 const currencySelect = document.getElementById('currency');
 
 const ACCOUNT_ICONS = { Card: '💳', Cash: '💵', Savings: '🐷' };
 const ACCOUNT_TYPE_NAMES = { Card: 'Карта', Cash: 'Наличные', Savings: 'Накопления' };
-const CATEGORY_ICONS = {
-    'Продукты': '🛒', 'Транспорт': '🚌', 'Кафе': '☕', 'Дом': '🏠', 'Здоровье': '💊',
-    'Развлечения': '🎬', 'Зарплата': '💼', 'Подарки': '🎁', 'Другое': '📦',
-};
+const OPERATION_TYPES = [['Expense', 'Расход'], ['Income', 'Доход'], ['Transfer', 'Перевод']];
+
+/** Набор иконок для выбора в форме категории. */
+const CATEGORY_ICON_CHOICES = [
+    '🛒', '🍔', '☕', '🍕', '🍺', '🚌', '🚕', '⛽',
+    '🚗', '🏠', '💡', '📱', '💻', '💊', '🏥', '💇',
+    '👕', '🎬', '🎮', '🎵', '📚', '🎓', '✈️', '🏋️',
+    '🐱', '🐶', '👶', '🎁', '🔧', '🧾', '📦', '🏷️',
+    '💼', '💰', '📈', '🏦', '💸', '🤝', '🪙', '⭐',
+];
 
 // =====================================================================
 //  Утилиты
@@ -87,7 +96,12 @@ function parseAmount(text, { allowNegative = false } = {}) {
     return pattern.test(s) ? Number(s.replace(',', '.')) : NaN;
 }
 
-function categoryIcon(name) { return CATEGORY_ICONS[name] ?? '🏷️'; }
+/** Число -> строка для поля ввода: 1500.5 -> "1500,5" */
+function amountToInput(value) {
+    return String(value).replace('.', ',');
+}
+
+function categoryIcon(icon) { return icon || '🏷️'; }
 
 // Нативные диалоги Telegram, обёрнутые в Promise, чтобы использовать с await.
 function confirmAsync(message) {
@@ -108,10 +122,19 @@ function haptic(type) {
 //  API
 // =====================================================================
 
+/** Ошибка API: помимо текста хранит HTTP-статус и тело ProblemDetails. */
+class ApiError extends Error {
+    constructor(message, status, problem) {
+        super(message);
+        this.status = status;
+        this.problem = problem;
+    }
+}
+
 /**
  * Обёртка над fetch: к каждому запросу добавляет заголовок с подписанным initData.
  * Сервер проверит подпись и поймёт, кто мы. Ошибки сервера (ProblemDetails)
- * превращаем в Error с понятным текстом.
+ * превращаем в ApiError с понятным текстом.
  */
 async function api(path, options = {}) {
     const response = await fetch(path, {
@@ -125,21 +148,23 @@ async function api(path, options = {}) {
 
     if (!response.ok) {
         let message = `Ошибка ${response.status}`;
+        let problem = null;
         try {
-            const problem = await response.json();
+            problem = await response.json();
             if (problem.errors) message = Object.values(problem.errors).flat().join('\n');
             else message = problem.detail ?? problem.title ?? message;
         } catch { /* тело не JSON — оставляем код ошибки */ }
-        throw new Error(message);
+        throw new ApiError(message, response.status, problem);
     }
 
     return response.status === 204 ? null : response.json(); // 204 No Content — тела нет
 }
 
-/** Загружаем счета и операции параллельно — Promise.all ждёт оба запроса. */
+/** Загружаем всё параллельно — Promise.all ждёт все запросы. */
 async function reloadData() {
-    [state.accounts, state.operations] = await Promise.all([
+    [state.accounts, state.categories, state.operations] = await Promise.all([
         api('/api/accounts'),
+        api('/api/categories'),
         api('/api/operations?limit=50'),
     ]);
 }
@@ -174,10 +199,11 @@ function showScreen(name) {
 }
 
 /**
- * Общая логика "Сохранить": блокируем повторные нажатия, крутим индикатор на кнопке,
- * показываем ошибку в форме, при успехе — вибрация и возврат на главный.
+ * Общая логика "Сохранить"/"Удалить": блокируем повторные нажатия, крутим индикатор
+ * на кнопке, показываем ошибку в форме, при успехе — перезагрузка данных, вибрация
+ * и переход на экран goBack.
  */
-function makeSubmitHandler(errorNode, action) {
+function makeSubmitHandler(errorNode, action, goBack = openHome) {
     let busy = false;
     return async () => {
         if (busy) return;
@@ -185,10 +211,11 @@ function makeSubmitHandler(errorNode, action) {
         errorNode.hidden = true;
         tg.MainButton.showProgress(false);
         try {
-            await action();
+            const done = await action();
+            if (done === false) return; // действие отменено (например, нажали "Нет" в подтверждении)
             await reloadData();
             haptic('success');
-            openHome();
+            goBack();
         } catch (e) {
             errorNode.textContent = e.message;
             errorNode.hidden = false;
@@ -198,6 +225,11 @@ function makeSubmitHandler(errorNode, action) {
             busy = false;
         }
     };
+}
+
+/** Поле формы: подпись + элемент ввода. */
+function field(label, input, props = {}) {
+    return el('label', { className: 'field', ...props }, el('span', { className: 'field-label' }, label), input);
 }
 
 // =====================================================================
@@ -221,7 +253,10 @@ function renderHome() {
         state.accounts.length > 0
             ? el('div', { className: 'list' }, state.accounts.map(renderAccountRow))
             : el('div', { className: 'empty' }, 'Счетов пока нет'),
-        el('button', { className: 'link-button', onclick: () => openAccountForm(null) }, '+ Новый счёт'),
+        el('div', { className: 'links' },
+            el('button', { className: 'link-button', onclick: () => openAccountForm(null) }, '+ Новый счёт'),
+            el('button', { className: 'link-button', onclick: () => openCalendar({ reset: true }) }, '📅 Календарь'),
+            el('button', { className: 'link-button', onclick: openCategories }, '🏷️ Категории')),
 
         el('div', { className: 'section-title' }, 'Последние операции'),
         renderOperations(),
@@ -257,19 +292,23 @@ function renderOperations() {
     return el('div', {}, nodes);
 }
 
-function renderOperationRow(op) {
+/**
+ * Строка операции. onOpen — что делать по нажатию: по умолчанию открыть редактирование
+ * с возвратом на главный; календарь передаёт свой вариант (с возвратом в календарь).
+ */
+function renderOperationRow(op, onOpen = () => openOperationForm(op)) {
     let icon, title, subtitle, amountText, amountClass;
 
     switch (op.type) {
         case 'Expense':
-            icon = categoryIcon(op.categoryName);
+            icon = categoryIcon(op.categoryIcon);
             title = op.categoryName;
             subtitle = op.accountName;
             amountText = '−' + money.format(op.amount);
             amountClass = '';
             break;
         case 'Income':
-            icon = categoryIcon(op.categoryName);
+            icon = categoryIcon(op.categoryIcon);
             title = op.categoryName;
             subtitle = op.accountName;
             amountText = '+' + money.format(op.amount);
@@ -285,7 +324,8 @@ function renderOperationRow(op) {
     }
     if (op.description) subtitle = `${op.description} · ${subtitle}`;
 
-    return el('button', { className: 'row', onclick: () => deleteOperation(op) },
+    // Нажатие на операцию — открыть её для редактирования
+    return el('button', { className: 'row', onclick: onOpen },
         el('span', { className: 'row-icon' }, icon),
         el('div', { className: 'row-main' },
             el('div', { className: 'row-title' }, title),
@@ -294,80 +334,89 @@ function renderOperationRow(op) {
     );
 }
 
-async function deleteOperation(op) {
-    const ok = await confirmAsync(`Удалить операцию на ${money.format(op.amount)}?`);
-    if (!ok) return;
-    try {
-        await api(`/api/operations/${op.id}`, { method: 'DELETE' });
-        await reloadData();
-        haptic('success');
-        renderHome();
-    } catch (e) {
-        await alertAsync(e.message);
-    }
-}
-
 // =====================================================================
-//  Экран: новая операция
+//  Экран: операция (создание и редактирование)
+//  operation === null  -> новая операция
+//  operation = {...}   -> редактирование существующей
+//  date    — дата по умолчанию для новой операции (из календаря)
+//  goBack  — куда вернуться после сохранения / по кнопке "назад"
 // =====================================================================
-function openOperationForm() {
+function openOperationForm(operation = null, { date = localIsoDate(0), goBack = openHome } = {}) {
+    const isNew = operation === null;
     showScreen('operation');
-    setBackButton(openHome);
+    setBackButton(goBack);
 
     // Локальное состояние формы. Замыкание: функции ниже "видят" эту переменную.
     const form = {
-        type: 'Expense',
-        categoryId: null,
+        type: operation?.type ?? 'Expense',
+        categoryId: operation?.categoryId ?? null,
     };
 
     const accountOption = a =>
         el('option', { value: a.id }, `${ACCOUNT_ICONS[a.type] ?? ''} ${a.name} · ${money.format(a.balance)}`);
 
     // ---- Поля ----
-    const typeButtons = [['Expense', 'Расход'], ['Income', 'Доход'], ['Transfer', 'Перевод']]
-        .map(([type, label]) => el('button', {
-            type: 'button',
-            onclick: () => { form.type = type; form.categoryId = null; update(); },
-        }, label));
+    const typeButtons = OPERATION_TYPES.map(([type, label]) => el('button', {
+        type: 'button',
+        onclick: () => {
+            if (form.type === type) return;
+            form.type = type;
+            form.categoryId = null; // категории у расхода и дохода разные — сбрасываем выбор
+            update();
+        },
+    }, label));
 
     const amountInput = el('input', {
         className: 'amount-input', inputMode: 'decimal', placeholder: '0', autocomplete: 'off',
+        value: operation ? amountToInput(operation.amount) : '',
     });
 
     const accountLabel = el('span', { className: 'field-label' });
     const accountSelect = el('select', {}, state.accounts.map(accountOption));
+    if (operation) accountSelect.value = operation.accountId;
 
     const toAccountSelect = el('select', {}, state.accounts.map(accountOption));
     // По умолчанию "куда" — первый счёт накоплений, иначе второй по списку.
     const defaultTarget = state.accounts.find(a => a.type === 'Savings') ?? state.accounts[1];
-    if (defaultTarget) toAccountSelect.value = defaultTarget.id;
-    const toAccountField = el('label', { className: 'field' },
-        el('span', { className: 'field-label' }, 'На счёт'), toAccountSelect);
+    toAccountSelect.value = operation?.toAccountId ?? defaultTarget?.id ?? '';
+    const toAccountField = field('На счёт', toAccountSelect);
 
     const chips = el('div', { className: 'chips' });
     const categoryField = el('div', { className: 'field' },
         el('span', { className: 'field-label' }, 'Категория'), chips);
 
-    const descriptionInput = el('input', { placeholder: 'Например: Пятёрочка', maxLength: 500 });
-    const dateInput = el('input', { type: 'date', value: localIsoDate(0), max: localIsoDate(0) });
+    const descriptionInput = el('input', {
+        placeholder: 'Например: Пятёрочка', maxLength: 500, value: operation?.description ?? '',
+    });
+    const dateInput = el('input', {
+        type: 'date', value: operation?.date ?? date, max: localIsoDate(0),
+    });
     const errorNode = el('p', { className: 'form-error', hidden: true });
 
+    const deleteButton = !isNew && el('button', {
+        className: 'danger-button',
+        onclick: makeSubmitHandler(errorNode, async () => {
+            if (!await confirmAsync(`Удалить операцию на ${money.format(operation.amount)}?`)) return false;
+            await api(`/api/operations/${operation.id}`, { method: 'DELETE' });
+        }, goBack),
+    }, 'Удалить операцию');
+
     screens.operation.replaceChildren(
-        el('div', { className: 'form-title' }, 'Новая операция'),
+        el('div', { className: 'form-title' }, isNew ? 'Новая операция' : 'Операция'),
         el('div', { className: 'segmented' }, typeButtons),
         errorNode,
-        el('label', { className: 'field' }, el('span', { className: 'field-label' }, 'Сумма'), amountInput),
+        field('Сумма', amountInput),
         el('label', { className: 'field' }, accountLabel, accountSelect),
         toAccountField,
         categoryField,
-        el('label', { className: 'field' }, el('span', { className: 'field-label' }, 'Описание'), descriptionInput),
-        el('label', { className: 'field' }, el('span', { className: 'field-label' }, 'Дата'), dateInput),
+        field('Описание', descriptionInput),
+        field('Дата', dateInput),
+        deleteButton,
     );
 
     /** Перерисовывает то, что зависит от типа операции. */
     function update() {
-        typeButtons.forEach((btn, i) =>
-            btn.classList.toggle('active', ['Expense', 'Income', 'Transfer'][i] === form.type));
+        typeButtons.forEach((btn, i) => btn.classList.toggle('active', OPERATION_TYPES[i][0] === form.type));
 
         const isTransfer = form.type === 'Transfer';
         accountLabel.textContent = { Expense: 'Со счёта', Income: 'На счёт', Transfer: 'Со счёта' }[form.type];
@@ -380,7 +429,7 @@ function openOperationForm() {
                 type: 'button',
                 className: 'chip' + (c.id === form.categoryId ? ' active' : ''),
                 onclick: () => { form.categoryId = c.id; tg.HapticFeedback?.selectionChanged(); update(); },
-            }, `${categoryIcon(c.name)} ${c.name}`)));
+            }, `${categoryIcon(c.icon)} ${c.name}`)));
         }
     }
 
@@ -392,22 +441,23 @@ function openOperationForm() {
         if (!(amount > 0)) throw new Error('Введите сумму, например 1500 или 99,90');
         if (form.type !== 'Transfer' && form.categoryId === null) throw new Error('Выберите категорию');
 
-        await api('/api/operations', {
-            method: 'POST',
-            body: JSON.stringify({
-                type: form.type,
-                amount,
-                accountId: Number(accountSelect.value),
-                toAccountId: form.type === 'Transfer' ? Number(toAccountSelect.value) : null,
-                categoryId: form.type === 'Transfer' ? null : form.categoryId,
-                description: descriptionInput.value,
-                date: dateInput.value,
-            }),
+        const body = JSON.stringify({
+            type: form.type,
+            amount,
+            accountId: Number(accountSelect.value),
+            toAccountId: form.type === 'Transfer' ? Number(toAccountSelect.value) : null,
+            categoryId: form.type === 'Transfer' ? null : form.categoryId,
+            description: descriptionInput.value,
+            date: dateInput.value,
         });
-    }));
+
+        // Одна форма — два действия: POST создаёт, PUT изменяет существующую.
+        if (isNew) await api('/api/operations', { method: 'POST', body });
+        else await api(`/api/operations/${operation.id}`, { method: 'PUT', body });
+    }, goBack));
 
     update();
-    amountInput.focus();
+    if (isNew) amountInput.focus();
 }
 
 // =====================================================================
@@ -426,19 +476,26 @@ function openAccountForm(account) {
             el('option', { value }, `${ACCOUNT_ICONS[value]} ${label}`)));
     const balanceInput = el('input', {
         className: 'amount-input', inputMode: 'decimal', placeholder: '0', autocomplete: 'off',
-        value: account ? String(account.balance).replace('.', ',') : '',
+        value: account ? amountToInput(account.balance) : '',
     });
     const errorNode = el('p', { className: 'form-error', hidden: true });
+
+    const deleteButton = !isNew && el('button', {
+        className: 'danger-button',
+        onclick: makeSubmitHandler(errorNode, async () => {
+            if (!await confirmAsync(`Удалить счёт «${account.name}»?`)) return false;
+            await api(`/api/accounts/${account.id}`, { method: 'DELETE' });
+        }),
+    }, 'Удалить счёт');
 
     screens.account.replaceChildren(
         el('div', { className: 'form-title' }, isNew ? 'Новый счёт' : 'Счёт'),
         errorNode,
-        el('label', { className: 'field' }, el('span', { className: 'field-label' }, 'Название'), nameInput),
+        field('Название', nameInput),
         // Тип выбираем только при создании (у существующего счёта он не меняется)
-        isNew && el('label', { className: 'field' }, el('span', { className: 'field-label' }, 'Тип'), typeSelect),
-        el('label', { className: 'field' },
-            el('span', { className: 'field-label' }, 'Сколько денег на счёте сейчас'), balanceInput),
-        !isNew && el('button', { className: 'danger-button', onclick: () => deleteAccount(account) }, 'Удалить счёт'),
+        isNew && field('Тип', typeSelect),
+        field('Сколько денег на счёте сейчас', balanceInput),
+        deleteButton,
     );
 
     setMainButton('Сохранить', makeSubmitHandler(errorNode, async () => {
@@ -461,16 +518,315 @@ function openAccountForm(account) {
     (isNew ? nameInput : balanceInput).focus();
 }
 
-async function deleteAccount(account) {
-    const ok = await confirmAsync(`Удалить счёт «${account.name}»?`);
-    if (!ok) return;
+// =====================================================================
+//  Экран: список категорий
+// =====================================================================
+function openCategories() {
+    showScreen('categories');
+    setBackButton(openHome);
+    setMainButton(null);
+
+    const section = (type, title) => {
+        const items = state.categories.filter(c => c.type === type);
+        return [
+            el('div', { className: 'section-title' }, title),
+            el('div', { className: 'list' }, items.map(c =>
+                el('button', { className: 'row', onclick: () => openCategoryForm(c, c.type) },
+                    el('span', { className: 'row-icon' }, categoryIcon(c.icon)),
+                    el('div', { className: 'row-main' }, el('div', { className: 'row-title' }, c.name))))),
+            el('button', { className: 'link-button', onclick: () => openCategoryForm(null, type) },
+                '+ Добавить категорию'),
+        ];
+    };
+
+    screens.categories.replaceChildren(
+        el('div', { className: 'form-title' }, 'Категории'),
+        ...section('Expense', 'Расходы'),
+        ...section('Income', 'Доходы'),
+    );
+}
+
+// =====================================================================
+//  Экран: категория (создание и редактирование)
+// =====================================================================
+function openCategoryForm(category, type) {
+    const isNew = category === null;
+    showScreen('category');
+    setBackButton(openCategories);
+
+    let selectedIcon = category?.icon ?? CATEGORY_ICON_CHOICES[0];
+
+    const nameInput = el('input', {
+        value: category?.name ?? '', placeholder: 'Например: Бензин', maxLength: 100,
+    });
+
+    // Сетка иконок: при выборе подсвечиваем выбранную
+    const iconButtons = CATEGORY_ICON_CHOICES.map(icon => el('button', {
+        type: 'button',
+        className: 'icon-choice' + (icon === selectedIcon ? ' active' : ''),
+        onclick: () => {
+            selectedIcon = icon;
+            iconButtons.forEach(b => b.classList.toggle('active', b.textContent === icon));
+            tg.HapticFeedback?.selectionChanged();
+        },
+    }, icon));
+
+    const errorNode = el('p', { className: 'form-error', hidden: true });
+
+    // ---- Удаление (с возможным переносом операций) ----
+    // Поле "Перенести операции в" появляется, только если сервер ответил 409 с operationsCount.
+    const otherCategories = state.categories.filter(c => c.type === type && c.id !== category?.id);
+    const moveSelect = el('select', {},
+        otherCategories.map(c => el('option', { value: c.id }, `${categoryIcon(c.icon)} ${c.name}`)));
+    const moveField = field('Перенести операции в', moveSelect, { hidden: true });
+
+    const deleteButton = !isNew && el('button', {
+        className: 'danger-button',
+        onclick: makeSubmitHandler(errorNode, async () => {
+            // Второй шаг: пользователь уже увидел поле переноса и выбрал категорию
+            if (!moveField.hidden) {
+                await api(`/api/categories/${category.id}?moveToCategoryId=${moveSelect.value}`, { method: 'DELETE' });
+                return;
+            }
+
+            if (!await confirmAsync(`Удалить категорию «${category.name}»?`)) return false;
+            try {
+                await api(`/api/categories/${category.id}`, { method: 'DELETE' });
+            } catch (e) {
+                // 409 + operationsCount -> по категории есть операции: спрашиваем, куда перенести
+                if (e instanceof ApiError && e.status === 409 && e.problem?.operationsCount) {
+                    moveField.hidden = false;
+                    deleteButton.textContent = `Перенести ${e.problem.operationsCount} опер. и удалить`;
+                    moveSelect.focus();
+                    return false; // остаёмся на экране
+                }
+                throw e;
+            }
+        }, openCategories),
+    }, 'Удалить категорию');
+
+    screens.category.replaceChildren(
+        el('div', { className: 'form-title' },
+            isNew ? (type === 'Expense' ? 'Новая категория расходов' : 'Новая категория доходов') : 'Категория'),
+        errorNode,
+        field('Название', nameInput),
+        el('div', { className: 'field' }, el('span', { className: 'field-label' }, 'Иконка'),
+            el('div', { className: 'icon-grid' }, iconButtons)),
+        moveField,
+        deleteButton,
+    );
+
+    setMainButton('Сохранить', makeSubmitHandler(errorNode, async () => {
+        if (isNew) {
+            await api('/api/categories', {
+                method: 'POST',
+                body: JSON.stringify({ name: nameInput.value, type, icon: selectedIcon }),
+            });
+        } else {
+            await api(`/api/categories/${category.id}`, {
+                method: 'PUT',
+                body: JSON.stringify({ name: nameInput.value, icon: selectedIcon }),
+            });
+        }
+    }, openCategories));
+
+    if (isNew) nameInput.focus();
+}
+
+// =====================================================================
+//  Экран: календарь
+// =====================================================================
+const WEEKDAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+
+/** Состояние календаря живёт между открытиями: вернулись из формы — тот же месяц и день. */
+const calendar = {
+    year: 0,
+    month: 0,              // 0..11, как в JS Date
+    selected: null,        // выбранный день 'YYYY-MM-DD'
+    days: new Map(),       // 'YYYY-MM-DD' -> итоги дня с сервера
+    dayOperations: [],     // операции выбранного дня
+    dayLoaded: false,
+    // "Токены" запросов — защита от гонки: пользователь быстро листает месяцы, ответы приходят
+    // в произвольном порядке. Применяем ответ, только если он от ПОСЛЕДНЕГО запроса.
+    summaryToken: 0,
+    dayToken: 0,
+};
+
+function isoDate(year, month, day) {
+    const pad = n => String(n).padStart(2, '0');
+    return `${year}-${pad(month + 1)}-${pad(day)}`;
+}
+
+function daysInMonth(year, month) {
+    return new Date(year, month + 1, 0).getDate(); // 0-й день следующего месяца = последний день этого
+}
+
+/** reset: true — открыть на текущем месяце и сегодняшнем дне (вход с главного экрана). */
+function openCalendar({ reset = false } = {}) {
+    if (reset || calendar.selected === null) {
+        const now = new Date();
+        calendar.year = now.getFullYear();
+        calendar.month = now.getMonth();
+        calendar.selected = localIsoDate(0);
+    }
+    showScreen('calendar');
+    setBackButton(openHome);
+    renderCalendar();
+    loadMonthSummary();
+    loadSelectedDay();
+}
+
+function shiftMonth(delta) {
+    // new Date сам "перенесёт" месяц через год: (2026, 12, 1) -> 1 января 2027
+    const d = new Date(calendar.year, calendar.month + delta, 1);
+    calendar.year = d.getFullYear();
+    calendar.month = d.getMonth();
+
+    // Листнули на текущий месяц — выбираем сегодня, иначе 1-е число
+    const today = localIsoDate(0);
+    const monthPrefix = isoDate(calendar.year, calendar.month, 1).slice(0, 7); // 'YYYY-MM'
+    calendar.selected = today.startsWith(monthPrefix) ? today : `${monthPrefix}-01`;
+
+    calendar.days = new Map();
+    tg.HapticFeedback?.selectionChanged();
+    renderCalendar();
+    loadMonthSummary();
+    loadSelectedDay();
+}
+
+function selectDay(iso) {
+    if (iso === calendar.selected) return;
+    calendar.selected = iso;
+    tg.HapticFeedback?.selectionChanged();
+    loadSelectedDay(); // сам перерисует экран
+}
+
+async function loadMonthSummary() {
+    const token = ++calendar.summaryToken;
+    const { year, month } = calendar;
+    const from = isoDate(year, month, 1);
+    const to = isoDate(year, month, daysInMonth(year, month));
     try {
-        await api(`/api/accounts/${account.id}`, { method: 'DELETE' });
-        await reloadData();
-        haptic('success');
-        openHome();
+        const days = await api(`/api/operations/daily?from=${from}&to=${to}`);
+        if (token !== calendar.summaryToken) return; // пока ждали, пользователь листнул дальше
+        calendar.days = new Map(days.map(d => [d.date, d]));
+        renderCalendar();
     } catch (e) {
-        await alertAsync(e.message); // например: "По счёту есть операции. Сначала удали их."
+        if (token === calendar.summaryToken) await alertAsync(e.message);
+    }
+}
+
+async function loadSelectedDay() {
+    const token = ++calendar.dayToken;
+    const day = calendar.selected;
+    calendar.dayLoaded = false;
+    calendar.dayOperations = [];
+    renderCalendar();
+    try {
+        const ops = await api(`/api/operations?from=${day}&to=${day}&limit=500`);
+        if (token !== calendar.dayToken) return;
+        calendar.dayOperations = ops;
+        calendar.dayLoaded = true;
+        renderCalendar();
+    } catch (e) {
+        if (token === calendar.dayToken) await alertAsync(e.message);
+    }
+}
+
+/** Точки под числом: красная — были расходы, зелёная — доходы, серая — только переводы. */
+function renderDots(summary) {
+    const dots = [];
+    if (summary.expense > 0) dots.push(el('span', { className: 'dot expense' }));
+    if (summary.income > 0) dots.push(el('span', { className: 'dot income' }));
+    if (dots.length === 0 && summary.count > 0) dots.push(el('span', { className: 'dot transfer' }));
+    return dots;
+}
+
+/** Блок "Доходы | Расходы" (для месяца и для дня). */
+function renderIncomeExpense(income, expense, incomeLabel, expenseLabel) {
+    return el('div', { className: 'summary' },
+        el('div', {},
+            el('div', { className: 'hint' }, incomeLabel),
+            el('div', { className: 'amount income' }, '+' + money.format(income))),
+        el('div', {},
+            el('div', { className: 'hint' }, expenseLabel),
+            el('div', { className: 'amount' }, '−' + money.format(expense))),
+    );
+}
+
+function renderCalendar() {
+    // Ответ сервера мог прийти, когда пользователь уже ушёл с календаря (например, в форму).
+    // Тогда не рисуем — иначе перехватили бы MainButton у текущего экрана.
+    if (screens.calendar.hidden) return;
+
+    const { year, month, selected } = calendar;
+    const today = localIsoDate(0);
+    const backToCalendar = () => openCalendar();
+
+    // ---- Заголовок "Ноябрь 2026" со стрелками ----
+    const monthName = new Intl.DateTimeFormat('ru-RU', { month: 'long' }).format(new Date(year, month, 1));
+    const header = el('div', { className: 'cal-header' },
+        el('button', { className: 'cal-nav', onclick: () => shiftMonth(-1), ariaLabel: 'Предыдущий месяц' }, '‹'),
+        el('div', { className: 'cal-title' }, `${monthName[0].toUpperCase()}${monthName.slice(1)} ${year}`),
+        el('button', { className: 'cal-nav', onclick: () => shiftMonth(1), ariaLabel: 'Следующий месяц' }, '›'),
+    );
+
+    // ---- Сетка: дни недели + пустые клетки до 1-го числа + дни месяца ----
+    // getDay(): 0 = воскресенье. Сдвигаем так, чтобы неделя начиналась с понедельника.
+    const firstWeekday = (new Date(year, month, 1).getDay() + 6) % 7;
+    const cells = [
+        ...WEEKDAYS.map(w => el('div', { className: 'cal-weekday' }, w)),
+        ...Array.from({ length: firstWeekday }, () => el('div')),
+    ];
+    for (let day = 1; day <= daysInMonth(year, month); day++) {
+        const iso = isoDate(year, month, day);
+        const summary = calendar.days.get(iso);
+        // Строки 'YYYY-MM-DD' можно сравнивать как текст — порядок совпадает с порядком дат.
+        const classes = ['cal-day',
+            iso === today && 'today',
+            iso === selected && 'selected',
+            iso > today && 'future'].filter(Boolean).join(' ');
+        cells.push(el('button', { className: classes, onclick: () => selectDay(iso) },
+            el('span', {}, String(day)),
+            el('span', { className: 'cal-dots' }, summary ? renderDots(summary) : [])));
+    }
+
+    // ---- Итоги месяца ----
+    const monthDays = [...calendar.days.values()];
+    const monthIncome = monthDays.reduce((s, d) => s + d.income, 0);
+    const monthExpense = monthDays.reduce((s, d) => s + d.expense, 0);
+
+    // ---- Выбранный день ----
+    const [sy, sm, sd] = selected.split('-').map(Number);
+    const dayTitle = new Intl.DateTimeFormat('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' })
+        .format(new Date(sy, sm - 1, sd));
+    const daySummary = calendar.days.get(selected);
+
+    let dayContent;
+    if (!calendar.dayLoaded) dayContent = el('div', { className: 'empty' }, 'Загрузка…');
+    else if (calendar.dayOperations.length === 0) dayContent = el('div', { className: 'empty' }, 'В этот день операций нет');
+    else dayContent = el('div', { className: 'list' }, calendar.dayOperations.map(op =>
+        renderOperationRow(op, () => openOperationForm(op, { goBack: backToCalendar }))));
+
+    screens.calendar.replaceChildren(
+        header,
+        el('div', { className: 'cal-grid' }, cells),
+        renderIncomeExpense(monthIncome, monthExpense, 'Доходы за месяц', 'Расходы за месяц'),
+        el('div', { className: 'day-title' }, dayTitle),
+        daySummary && (daySummary.income > 0 || daySummary.expense > 0)
+            ? renderIncomeExpense(daySummary.income, daySummary.expense, 'Доходы', 'Расходы')
+            : null,
+        el('div', { style: 'margin-top: 12px' }, dayContent),
+    );
+
+    // Добавить операцию можно только не в будущем (сервер всё равно не пропустит)
+    if (selected <= today) {
+        const shortDate = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long' })
+            .format(new Date(sy, sm - 1, sd));
+        setMainButton(`Добавить на ${shortDate}`,
+            () => openOperationForm(null, { date: selected, goBack: backToCalendar }));
+    } else {
+        setMainButton(null);
     }
 }
 
@@ -513,8 +869,7 @@ async function init() {
         applyCurrency(state.me.currency);
         currencySelect.hidden = false;
 
-        // Категории меняются редко — грузим один раз; счета и операции — через reloadData.
-        [state.categories] = await Promise.all([api('/api/categories'), reloadData()]);
+        await reloadData();
         openHome();
     } catch (e) {
         screens.home.replaceChildren(el('p', { className: 'error' }, `Ошибка: ${e.message}`));

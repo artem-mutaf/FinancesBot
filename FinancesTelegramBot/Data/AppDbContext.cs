@@ -57,6 +57,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         {
             e.Property(c => c.Name).HasMaxLength(100);
             e.Property(c => c.Type).HasConversion<string>().HasMaxLength(20);
+            // Эмодзи может состоять из нескольких символов (👨‍👩‍👧 — это 5 code points), берём с запасом.
+            e.Property(c => c.Icon).HasMaxLength(16);
 
             e.HasOne(c => c.User)
                 .WithMany(u => u.Categories)

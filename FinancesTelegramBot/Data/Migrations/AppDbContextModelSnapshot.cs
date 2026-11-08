@@ -92,6 +92,10 @@ namespace FinancesTelegramBot.Data.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
+                    b.Property<string>("Icon")
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(100)

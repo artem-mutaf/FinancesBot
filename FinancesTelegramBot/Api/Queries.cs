@@ -51,6 +51,7 @@ public static class Queries
             o.ToAccount != null ? o.ToAccount.Name : null,
             o.CategoryId,
             o.Category != null ? o.Category.Name : null,
+            o.Category != null ? o.Category.Icon : null,
             o.Description,
             o.Date));
 }

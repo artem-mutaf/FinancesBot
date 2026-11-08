@@ -11,4 +11,7 @@ public class Category
     public string Name { get; set; } = string.Empty;
 
     public CategoryType Type { get; set; }
+
+    /// <summary>Эмодзи для отображения ("🛒"). Необязательное — без него фронтенд покажет 🏷️.</summary>
+    public string? Icon { get; set; }
 }
