@@ -77,5 +77,6 @@ app.MapMeEndpoints();
 app.MapAccountsEndpoints();
 app.MapCategoriesEndpoints();
 app.MapOperationsEndpoints();
+app.MapStatsEndpoints();
 
 app.Run();

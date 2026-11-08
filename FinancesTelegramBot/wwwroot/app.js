@@ -4,6 +4,12 @@ const tg = window.Telegram.WebApp;
 tg.ready();   // сообщаем Telegram, что страница загрузилась
 tg.expand();  // раскрываем Mini App на весь экран
 
+// Светлая/тёмная тема Telegram -> атрибут data-theme на <html>.
+// CSS по нему переключает цвета графиков (основные цвета Telegram подставляет сам).
+function applyTheme() { document.documentElement.dataset.theme = tg.colorScheme; }
+applyTheme();
+tg.onEvent('themeChanged', applyTheme);
+
 // =====================================================================
 //  Состояние приложения — единственный источник правды для отрисовки.
 //  Схема простая: загрузили данные -> положили в state -> перерисовали экран.
@@ -24,6 +30,7 @@ const screens = {
     categories: document.getElementById('screen-categories'),
     category: document.getElementById('screen-category'),
     calendar: document.getElementById('screen-calendar'),
+    stats: document.getElementById('screen-stats'),
 };
 const greeting = document.getElementById('greeting');
 const currencySelect = document.getElementById('currency');
@@ -253,14 +260,20 @@ function renderHome() {
         state.accounts.length > 0
             ? el('div', { className: 'list' }, state.accounts.map(renderAccountRow))
             : el('div', { className: 'empty' }, 'Счетов пока нет'),
-        el('div', { className: 'links' },
-            el('button', { className: 'link-button', onclick: () => openAccountForm(null) }, '+ Новый счёт'),
-            el('button', { className: 'link-button', onclick: () => openCalendar({ reset: true }) }, '📅 Календарь'),
-            el('button', { className: 'link-button', onclick: openCategories }, '🏷️ Категории')),
+        el('button', { className: 'link-button', onclick: () => openAccountForm(null) }, '+ Новый счёт'),
+
+        el('div', { className: 'nav-tiles' },
+            navTile('📅', 'Календарь', () => openCalendar({ reset: true })),
+            navTile('📊', 'Статистика', () => openStats({ reset: true })),
+            navTile('🏷️', 'Категории', openCategories)),
 
         el('div', { className: 'section-title' }, 'Последние операции'),
         renderOperations(),
     );
+}
+
+function navTile(icon, label, onclick) {
+    return el('button', { className: 'nav-tile', onclick }, el('span', {}, icon), el('span', {}, label));
 }
 
 function renderAccountRow(account) {
@@ -828,6 +841,219 @@ function renderCalendar() {
     } else {
         setMainButton(null);
     }
+}
+
+// =====================================================================
+//  Экран: статистика
+// =====================================================================
+const stats = {
+    year: 0,
+    month: 0,          // 1..12 — как на сервере (в отличие от JS Date, где 0..11)
+    type: 'Expense',   // 'Expense' | 'Income'
+    data: null,        // ответ /api/stats
+    loading: false,
+    token: 0,          // защита от гонки ответов, как в календаре
+};
+
+function monthName(year, month, format = 'long') {
+    const name = new Intl.DateTimeFormat('ru-RU', { month: format }).format(new Date(year, month - 1, 1));
+    return name[0].toUpperCase() + name.slice(1);
+}
+
+function isCurrentMonth(year, month) {
+    const now = new Date();
+    return year === now.getFullYear() && month === now.getMonth() + 1;
+}
+
+function openStats({ reset = false } = {}) {
+    if (reset || stats.year === 0) {
+        const now = new Date();
+        stats.year = now.getFullYear();
+        stats.month = now.getMonth() + 1;
+    }
+    showScreen('stats');
+    setBackButton(openHome);
+    setMainButton(null);
+    loadStats();
+}
+
+function goToStatsMonth(year, month) {
+    if (year === stats.year && month === stats.month) return;
+    stats.year = year;
+    stats.month = month;
+    tg.HapticFeedback?.selectionChanged();
+    loadStats();
+}
+
+function shiftStatsMonth(delta) {
+    const d = new Date(stats.year, stats.month - 1 + delta, 1);
+    goToStatsMonth(d.getFullYear(), d.getMonth() + 1);
+}
+
+async function loadStats() {
+    const token = ++stats.token;
+    stats.loading = true;
+    renderStats(); // старые данные остаются на экране полупрозрачными — без мигания
+    try {
+        const data = await api(`/api/stats?year=${stats.year}&month=${stats.month}`);
+        if (token !== stats.token) return;
+        stats.data = data;
+    } catch (e) {
+        if (token === stats.token) await alertAsync(e.message);
+    } finally {
+        if (token === stats.token) {
+            stats.loading = false;
+            renderStats();
+        }
+    }
+}
+
+function renderStats() {
+    if (screens.stats.hidden) return;
+
+    const { year, month, type, data } = stats;
+    const isExpense = type === 'Expense';
+
+    const header = el('div', { className: 'cal-header' },
+        el('button', { className: 'cal-nav', onclick: () => shiftStatsMonth(-1), ariaLabel: 'Предыдущий месяц' }, '‹'),
+        el('div', { className: 'cal-title' }, `${monthName(year, month)} ${year}`),
+        // В будущее листать незачем — там пусто
+        isCurrentMonth(year, month)
+            ? el('div', { style: 'width: 40px' })
+            : el('button', { className: 'cal-nav', onclick: () => shiftStatsMonth(1), ariaLabel: 'Следующий месяц' }, '›'),
+    );
+
+    const typeSwitch = el('div', { className: 'segmented' },
+        [['Expense', 'Расходы'], ['Income', 'Доходы']].map(([value, label]) => el('button', {
+            type: 'button',
+            className: value === type ? 'active' : '',
+            onclick: () => {
+                if (stats.type === value) return;
+                stats.type = value;
+                tg.HapticFeedback?.selectionChanged();
+                renderStats(); // данные уже есть (сервер прислал и расходы, и доходы) — просто перерисовать
+            },
+        }, label)));
+
+    // Данные ещё ни разу не загружались
+    if (!data) {
+        screens.stats.replaceChildren(header, typeSwitch, el('div', { className: 'empty' }, 'Загрузка…'));
+        return;
+    }
+
+    const pick = totals => isExpense ? totals.expense : totals.income;
+
+    screens.stats.replaceChildren(
+        header,
+        typeSwitch,
+        el('div', { className: 'stats-body' + (stats.loading ? ' loading' : '') },
+            renderStatsHero(data, isExpense, pick),
+            el('div', { className: 'section-title' }, 'По категориям'),
+            renderCategoryBars(isExpense ? data.expenseByCategory : data.incomeByCategory, isExpense),
+            el('div', { className: 'section-title' }, `${isExpense ? 'Расходы' : 'Доходы'} за 6 месяцев`),
+            renderTrend(data.trend, pick),
+        ),
+    );
+}
+
+/** Главное число месяца + сравнение с прошлым + сальдо. */
+function renderStatsHero(data, isExpense, pick) {
+    const current = pick(data.current);
+    const previous = pick(data.previous);
+
+    // Сравнение с прошлым месяцем. Направление показываем СТРЕЛКОЙ и словом, а не только цветом.
+    // Для расходов рост — плохо, для доходов — хорошо.
+    let delta;
+    if (previous === 0) {
+        delta = current === 0 ? 'Операций нет' : 'В прошлом месяце: 0';
+    } else if (current === previous) {
+        delta = 'Как в прошлом месяце';
+    } else {
+        const percent = Math.round(Math.abs(current - previous) / previous * 100);
+        const up = current > previous;
+        const good = isExpense ? !up : up;
+        delta = [
+            el('span', { className: (up ? 'up-' : 'down-') + (good ? 'good' : 'bad') },
+                `${up ? '↑' : '↓'} ${percent}%`),
+            ` к прошлому месяцу (${money.format(previous)})`,
+        ];
+    }
+
+    const net = data.current.income - data.current.expense;
+
+    return el('div', {},
+        el('div', { className: 'hero-label' },
+            `${isExpense ? 'Расходы' : 'Доходы'} за ${monthName(data.year, data.month).toLowerCase()}`),
+        el('div', { className: 'hero-value' }, money.format(current)),
+        el('div', { className: 'delta' }, delta),
+        el('div', { className: 'delta', style: 'margin-top: 4px' },
+            'Доходы − расходы: ',
+            el('span', { className: 'amount ' + (net >= 0 ? 'income' : 'negative') },
+                (net > 0 ? '+' : '') + money.format(net))),
+    );
+}
+
+/**
+ * Отсортированные горизонтальные полосы — одна на категорию, все одного цвета.
+ * Длина полосы = доля категории от итога месяца (совпадает с подписанным %).
+ */
+function renderCategoryBars(items, isExpense) {
+    if (items.length === 0)
+        return el('div', { className: 'empty' }, isExpense ? 'Расходов за этот месяц нет' : 'Доходов за этот месяц нет');
+
+    const total = items.reduce((s, c) => s + c.amount, 0);
+
+    return el('div', { className: 'list' }, items.map(c => {
+        const share = c.amount / total;
+        const percentText = share < 0.01 ? '<1%' : `${Math.round(share * 100)}%`;
+        return el('div', {
+            className: 'cat-row',
+            // Для экранных дикторов — вся строка одной фразой
+            ariaLabel: `${c.name}: ${money.format(c.amount)}, ${percentText}`,
+        },
+            el('div', { className: 'cat-line' },
+                el('span', { className: 'row-icon' }, categoryIcon(c.icon)),
+                el('div', { className: 'row-main' }, c.name,
+                    el('div', { className: 'cat-meta' }, `${c.count} опер.`)),
+                el('span', { className: 'amount' }, money.format(c.amount))),
+            el('div', { className: 'bar-line' },
+                el('div', { className: 'bar-track' },
+                    el('div', { className: 'bar-fill', style: `width: ${Math.max(share * 100, 1)}%` })),
+                el('span', { className: 'bar-percent' }, percentText)),
+        );
+    }));
+}
+
+/**
+ * Столбцы за 6 месяцев. Выбранный (последний) месяц — акцентным цветом, остальные — серым.
+ * Подпись значения — только над выбранным столбцом (не над каждым — иначе каша).
+ * Нажатие на столбец переключает всю статистику на этот месяц.
+ */
+function renderTrend(trend, pick) {
+    const max = Math.max(...trend.map(pick), 0);
+    const compact = new Intl.NumberFormat('ru-RU', {
+        style: 'currency', currency: state.me.currency, notation: 'compact', maximumFractionDigits: 1,
+    });
+
+    return el('div', { className: 'trend' }, trend.map(m => {
+        const value = pick(m);
+        const isSelected = m.year === stats.year && m.month === stats.month;
+        const heightPercent = max > 0 ? value / max * 100 : 0;
+        const label = `${monthName(m.year, m.month)} ${m.year}: ${money.format(value)}`;
+
+        return el('button', {
+            className: 'trend-col' + (isSelected ? ' current' : ''),
+            onclick: () => goToStatsMonth(m.year, m.month),
+            title: label,      // всплывающая подсказка на компьютере
+            ariaLabel: label,  // для экранных дикторов
+        },
+            el('div', { className: 'trend-value' }, isSelected && value > 0 ? compact.format(value) : ''),
+            el('div', { className: 'trend-area' },
+                // Ненулевое значение — минимум 2px, чтобы маленькая сумма не исчезла совсем
+                value > 0 && el('div', { className: 'trend-bar', style: `height: max(2px, ${heightPercent}%)` })),
+            el('div', { className: 'trend-label' }, monthName(m.year, m.month, 'short').replace('.', '')),
+        );
+    }));
 }
 
 // =====================================================================

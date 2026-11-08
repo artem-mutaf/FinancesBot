@@ -12,6 +12,18 @@
     --danger: var(--tg-theme-destructive-text-color, #e53935);
     --success: #31a24c;
     --separator: color-mix(in srgb, var(--hint) 25%, transparent);
+
+    /* Цвета графиков. Акцент — проверенный "слот 1" палитры для визуализаций;
+       серый — фон/контекст. Для тёмной темы — свои значения (не просто инверсия).
+       Тема (data-theme) выставляется из Telegram в app.js. */
+    --viz-accent: #2a78d6;
+    --viz-context: #c3c2b7;
+    --viz-track: #e1e0d9;
+}
+:root[data-theme="dark"] {
+    --viz-accent: #3987e5;
+    --viz-context: #52514e;
+    --viz-track: #2c2c2a;
 }
 
 * { box-sizing: border-box; }
@@ -141,9 +153,6 @@ input:focus, select:focus { border-color: var(--accent); }
 }
 .icon-choice.active { border-color: var(--accent); }
 
-/* Ряд ссылок под списком счетов */
-.links { display: flex; justify-content: space-between; flex-wrap: wrap; }
-
 /* ---------- Календарь ---------- */
 .cal-header { display: flex; align-items: center; justify-content: space-between; margin: 8px 0 12px; }
 .cal-title { font-size: 18px; font-weight: 700; }
@@ -178,6 +187,56 @@ input:focus, select:focus { border-color: var(--accent); }
 .summary .amount { font-size: 17px; }
 .day-title { font-size: 17px; font-weight: 700; margin: 24px 4px 0; }
 .day-title::first-letter { text-transform: uppercase; }
+
+/* ---------- Плитки навигации на главном ---------- */
+.nav-tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 8px; }
+.nav-tile {
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    padding: 12px 4px; border: none; border-radius: 12px;
+    background: var(--card); color: var(--text); font: inherit; font-size: 13px; cursor: pointer;
+}
+.nav-tile span:first-child { font-size: 22px; }
+.nav-tile:active { background: var(--separator); }
+
+/* ---------- Статистика ---------- */
+/* Пока грузится новый месяц — держим старые данные полупрозрачными, без "прыжка" вёрстки */
+.stats-body { transition: opacity .15s; }
+.stats-body.loading { opacity: .5; }
+
+/* Главное число месяца. Пропорциональные цифры (не tabular) — так большие числа выглядят ровнее. */
+.hero-label { color: var(--hint); font-size: 14px; margin-top: 4px; }
+.hero-value { font-size: 36px; font-weight: 700; margin: 2px 0 4px; }
+.delta { font-size: 14px; color: var(--hint); }
+.delta .up-bad, .delta .down-bad { color: var(--danger); font-weight: 600; }
+.delta .up-good, .delta .down-good { color: var(--success); font-weight: 600; }
+
+/* Горизонтальные полосы по категориям: одна шкала, один цвет, отсортированы по убыванию */
+.cat-row { padding: 10px 16px; }
+.cat-row + .cat-row { border-top: 1px solid var(--separator); }
+.cat-line { display: flex; align-items: center; gap: 10px; }
+.cat-line .row-main { font-weight: 600; }
+.cat-meta { color: var(--hint); font-size: 13px; }
+.bar-line { display: flex; align-items: center; gap: 10px; margin-top: 6px; padding-left: 38px; }
+.bar-track { flex: 1; height: 6px; border-radius: 3px; background: var(--viz-track); overflow: hidden; }
+.bar-fill { height: 100%; border-radius: 3px; background: var(--viz-accent); }
+.bar-percent { width: 36px; text-align: right; font-size: 13px; color: var(--hint); font-variant-numeric: tabular-nums; }
+
+/* Столбцы динамики за 6 месяцев: выбранный месяц — акцентом, остальные — серым контекстом */
+.trend { display: flex; gap: 8px; background: var(--card); border-radius: 12px; padding: 12px 12px 8px; }
+.trend-col {
+    flex: 1; min-width: 0; padding: 0;
+    display: flex; flex-direction: column; align-items: stretch;
+    border: none; background: none; color: var(--text); font: inherit; cursor: pointer;
+}
+.trend-value { height: 16px; font-size: 11px; font-weight: 600; text-align: center; white-space: nowrap; }
+.trend-area {
+    height: 110px; display: flex; align-items: flex-end;
+    border-bottom: 1px solid var(--viz-context); /* базовая линия */
+}
+.trend-bar { width: 100%; border-radius: 4px 4px 0 0; background: var(--viz-context); }
+.trend-col.current .trend-bar { background: var(--viz-accent); }
+.trend-label { font-size: 12px; color: var(--hint); text-align: center; margin-top: 6px; }
+.trend-col.current .trend-label { color: var(--text); font-weight: 600; }
 
 .danger-button {
     width: 100%; margin-top: 8px; padding: 12px;
